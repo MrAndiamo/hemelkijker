@@ -683,7 +683,12 @@
   function deselectSolarBody() {
     selectedSolarBody = null;
     hideInfoCard();
-    startCameraFlyTo(new THREE.Vector3(0, 7, 12), new THREE.Vector3(0, 0, 0));
+    // camDist terugzetten naar de overzicht-afstand: anders gebruikt de
+    // volgende animate()-frame (zodra deze vlucht klaar is) nog de laatst
+    // ingezoomde afstand van acceptCenter() en springt de camera meteen
+    // weer terug naar dichtbij.
+    camDist = 12;
+    startCameraFlyTo(new THREE.Vector3(0, camDist * 0.6, camDist), new THREE.Vector3(0, 0, 0));
   }
 
   // Dubbeltik/dubbelklik op een planeet of de zon: maakt 'm het nieuwe
@@ -698,7 +703,15 @@
     centerBodyKey = key === "Sun" || centerBodyKey === key ? null : key;
     updateSolarSystemPositions();
     updateCenterBadge();
-    deselectSolarBody(); // camera terug naar overzicht — dat draait nu om het nieuwe centrum
+    selectedSolarBody = null;
+    hideInfoCard();
+    // Het nieuwe centrum komt op (0,0,0) te staan — zoom daarop in i.p.v.
+    // terug te springen naar het volledige overzicht, zodat je omringd
+    // bent door de sterrenachtergrond bij het lichaam waar je net op
+    // dubbelklikte. (De centrum-badge blijft de weg terug naar het
+    // volledige overzicht.)
+    camDist = clampZoom(2.4);
+    startCameraFlyTo(new THREE.Vector3(0, camDist * 0.6, camDist), new THREE.Vector3(0, 0, 0));
   }
 
   // Camera staat vast (alleen afstand verandert door zoom) — de zichtbare
