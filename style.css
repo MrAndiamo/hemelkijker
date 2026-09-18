@@ -66,13 +66,17 @@ html, body {
   color: #ff8a8a;
 }
 
-#sky {
+#globe-container {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
+}
+
+#globe-container canvas {
   display: block;
-  touch-action: none;
+  width: 100%;
+  height: 100%;
 }
 
 #topbar {
@@ -116,15 +120,40 @@ html, body {
   border-color: rgba(140, 170, 255, 0.6);
 }
 
-#warning {
+#plane-panel {
   position: absolute;
-  top: calc(env(safe-area-inset-top, 0px) + 38px);
-  left: 14px;
-  right: 14px;
-  background: rgba(120, 20, 20, 0.85);
-  color: #ffe3e3;
-  padding: 8px 12px;
-  border-radius: 10px;
-  font-size: 0.8rem;
-  text-align: center;
+  top: calc(env(safe-area-inset-top, 0px) + 40px);
+  right: 12px;
+  max-width: 220px;
+  max-height: 40vh;
+  overflow-y: auto;
+  background: rgba(8, 12, 26, 0.75);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 12px;
+  padding: 10px 12px;
+  font-size: 0.78rem;
+  backdrop-filter: blur(4px);
 }
+
+#plane-panel h3 {
+  margin: 0 0 6px;
+  font-size: 0.8rem;
+  color: #cfe0ff;
+}
+
+#plane-panel .plane-item {
+  padding: 5px 0;
+  border-top: 1px solid rgba(255,255,255,0.08);
+  line-height: 1.35;
+}
+
+#plane-panel .plane-item:first-of-type { border-top: none; }
+
+#plane-panel .plane-item .cs { font-weight: 600; color: #8fd3ff; }
+#plane-panel .plane-item .meta { color: #9aa3c9; font-size: 0.72rem; }
+
+#plane-panel .plane-empty {
+  color: #8a92b8;
+  font-size: 0.75rem;
+}
+

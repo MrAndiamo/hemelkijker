@@ -1,16 +1,21 @@
-/* Hemelkijker — vaste "sky dome"-weergave van vliegtuigen, planeten en sterren.
+/* Hemelkijker — een 3D-aarde (Three.js) die op de echte huidige tijd draait,
+ * met sterren/zon/maan/planeten als vaste hemelbol op hun echte RA/Dec-positie
+ * (dus ze "circelen" om de aarde doordat de aarde er scheenbaar onder
+ * doorheen draait — precies zoals in het echt). Vliegtuigen zitten op een
+ * heel andere schaal (kilometers, niet lichtjaren) en staan daarom als losse
+ * lijst naast de globe, niet in de 3D-scene.
  *
- * Geen kompas/kanteling nodig: het midden van de cirkel is recht boven je
- * (zenit), de rand is de horizon, en de hoek rondom is het kompaskwadrant
- * (noord boven, vast). Alles dat nu boven je is staat gewoon meteen in beeld.
- *
- * Uitbreiden: voeg een nieuwe "layer" toe door 1) een knop in index.html,
- * 2) een fetch/berekenfunctie die {name, az, alt, type, info} teruggeeft,
- * 3) die array meegeven aan collectObjects().
+ * Uitbreiden: nieuwe hemelobjecten? voeg toe aan addCelestialSprites() of
+ * updateCelestialBodies(). Nieuwe niet-hemelse laag (zoals vliegtuigen)?
+ * volg het patroon van updatePlanes()/renderPlaneList().
  */
 
 (function () {
   "use strict";
+
+  const DEG2RAD = Math.PI / 180;
+  const EARTH_RADIUS = 1;
+  const SKY_RADIUS = 30;
 
   const state = {
     lat: null,
@@ -27,29 +32,43 @@
   const skyScreen = document.getElementById("sky-screen");
   const startBtn = document.getElementById("start-btn");
   const startStatus = document.getElementById("start-status");
-  const canvas = document.getElementById("sky");
-  const ctx = canvas.getContext("2d");
-  const planeCountEl = document.getElementById("plane-count");
+  const globeContainer = document.getElementById("globe-container");
   const timeReadout = document.getElementById("time-readout");
   const locReadout = document.getElementById("loc-readout");
-  const warningEl = document.getElementById("warning");
+  const planePanel = document.getElementById("plane-panel");
+  const planeListEl = document.getElementById("plane-list");
 
-  // ---------- helpers ----------
+  // ---------- tijd / astronomie helpers ----------
 
-  const rad = (d) => (d * Math.PI) / 180;
-  const deg = (r) => (r * 180) / Math.PI;
-
-  function normalizeDeg(a) {
-    a = a % 360;
-    return a < 0 ? a + 360 : a;
+  function julianDate(date) {
+    return date.getTime() / 86400000 + 2440587.5;
   }
 
-  function showWarning(msg) {
-    warningEl.textContent = msg;
-    warningEl.classList.remove("hidden");
+  // Greenwich Mean Sidereal Time, in graden (0-360).
+  function gmstDegrees(date) {
+    const jd = julianDate(date);
+    const T = (jd - 2451545.0) / 36525;
+    let g = 280.46061837 + 360.98564736629 * (jd - 2451545.0) + 0.000387933 * T * T - (T * T * T) / 38710000;
+    g = g % 360;
+    return g < 0 ? g + 360 : g;
   }
-  function clearWarning() {
-    warningEl.classList.add("hidden");
+
+  // lat/lon (graden) -> punt op een bol met gegeven straal, in dezelfde
+  // conventie als de standaard UV-mapping van THREE.SphereGeometry.
+  // Voor hemelobjecten gebruiken we dec als "lat" en ra (in graden) als "lon".
+  function latLonToVector3(latDeg, lonDeg, radius) {
+    const phi = (90 - latDeg) * DEG2RAD;
+    const theta = (lonDeg + 180) * DEG2RAD;
+    return new THREE.Vector3(
+      -radius * Math.sin(phi) * Math.cos(theta),
+      radius * Math.cos(phi),
+      radius * Math.sin(phi) * Math.sin(theta)
+    );
+  }
+
+  const COMPASS = ["N", "NO", "O", "ZO", "Z", "ZW", "W", "NW"];
+  function compassLabel(bearingDeg) {
+    return COMPASS[Math.round(((bearingDeg % 360) + 360) % 360 / 45) % 8];
   }
 
   // ---------- locatie ----------
@@ -73,10 +92,9 @@
         state.lon = pos.coords.longitude;
         state.heightM = pos.coords.altitude || 0;
         locReadout.textContent = `📍 ${state.lat.toFixed(3)}, ${state.lon.toFixed(3)}`;
+        placeLocationMarker();
       },
-      (err) => {
-        console.warn("locatie-fout", err);
-      },
+      (err) => console.warn("locatie-fout", err),
       { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 }
     );
   }
@@ -85,19 +103,20 @@
 
   function haversineBearingDistance(lat1, lon1, lat2, lon2) {
     const R = 6371000;
+    const rad = (d) => (d * Math.PI) / 180;
     const φ1 = rad(lat1), φ2 = rad(lat2);
     const Δφ = rad(lat2 - lat1), Δλ = rad(lon2 - lon1);
     const a = Math.sin(Δφ / 2) ** 2 + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) ** 2;
     const distance = 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
     const y = Math.sin(Δλ) * Math.cos(φ2);
     const x = Math.cos(φ1) * Math.sin(φ2) - Math.sin(φ1) * Math.cos(φ2) * Math.cos(Δλ);
-    const bearing = normalizeDeg(deg(Math.atan2(y, x)));
+    const bearing = ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
     return { distance, bearing };
   }
 
   async function updatePlanes() {
     if (state.lat == null || state.lon == null) return;
-    const delta = 1.2; // ~130 km box rond de gebruiker
+    const delta = 1.2;
     const lamin = state.lat - delta, lamax = state.lat + delta;
     const lomin = state.lon - delta, lomax = state.lon + delta;
     const url = `https://opensky-network.org/api/states/all?lamin=${lamin}&lomin=${lomin}&lamax=${lamax}&lomax=${lomax}`;
@@ -113,23 +132,34 @@
           const lon = s[5], lat = s[6];
           const altM = s[13] != null ? s[13] : s[7] != null ? s[7] : 0;
           const { distance, bearing } = haversineBearingDistance(state.lat, state.lon, lat, lon);
-          const elevation = deg(Math.atan2(altM - state.heightM, distance));
           const callsign = (s[1] || "").trim() || s[0];
-          return {
-            name: callsign,
-            az: bearing,
-            alt: elevation,
-            type: "plane",
-            info: `${Math.round(distance / 1000)} km · ${Math.round(altM)} m`,
-          };
+          return { name: callsign, distance, bearing, altM };
         })
-        .filter((p) => p.alt > -2);
+        .sort((a, b) => a.distance - b.distance);
       state.planeError = null;
     } catch (err) {
       state.planeError = "Vliegtuigdata niet beschikbaar (" + err.message + ")";
       console.warn(err);
     } finally {
       state.planesFetched = true;
+      renderPlaneList();
+    }
+  }
+
+  function renderPlaneList() {
+    if (state.planeError) {
+      planeListEl.innerHTML = `<div class="plane-empty">${state.planeError}</div>`;
+    } else if (state.planes.length === 0) {
+      planeListEl.innerHTML = `<div class="plane-empty">Geen vliegtuigen gevonden in de buurt.</div>`;
+    } else {
+      planeListEl.innerHTML = state.planes
+        .slice(0, 12)
+        .map(
+          (p) =>
+            `<div class="plane-item"><span class="cs">${p.name}</span><br>` +
+            `<span class="meta">${Math.round(p.distance / 1000)} km ${compassLabel(p.bearing)} · ${Math.round(p.altM)} m</span></div>`
+        )
+        .join("");
     }
   }
 
@@ -138,219 +168,188 @@
     setInterval(updatePlanes, 20000);
   }
 
-  // ---------- planeten & sterren ----------
+  // ---------- Three.js scene ----------
+
+  let renderer, scene, camera;
+  let earthGroup, earthMesh, locationMarker;
+  let sunLight;
+  const planetSprites = {}; // body -> sprite
 
   const PLANET_BODIES = [
-    { body: "Sun", name: "Zon" },
-    { body: "Moon", name: "Maan" },
-    { body: "Mercury", name: "Mercurius" },
-    { body: "Venus", name: "Venus" },
-    { body: "Mars", name: "Mars" },
-    { body: "Jupiter", name: "Jupiter" },
-    { body: "Saturn", name: "Saturnus" },
+    { body: "Sun", name: "Zon", emoji: "☀️" },
+    { body: "Moon", name: "Maan", emoji: "🌕" },
+    { body: "Mercury", name: "Mercurius", emoji: "🪐" },
+    { body: "Venus", name: "Venus", emoji: "🪐" },
+    { body: "Mars", name: "Mars", emoji: "🪐" },
+    { body: "Jupiter", name: "Jupiter", emoji: "🪐" },
+    { body: "Saturn", name: "Saturnus", emoji: "🪐" },
   ];
 
-  function getPlanetObjects() {
-    if (state.lat == null || typeof Astronomy === "undefined") return [];
+  function makeEmojiSprite(emoji, worldSize) {
+    const c = document.createElement("canvas");
+    c.width = c.height = 64;
+    const cx = c.getContext("2d");
+    cx.font = "48px sans-serif";
+    cx.textAlign = "center";
+    cx.textBaseline = "middle";
+    cx.fillText(emoji, 32, 34);
+    const tex = new THREE.CanvasTexture(c);
+    const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false });
+    const sprite = new THREE.Sprite(mat);
+    sprite.scale.set(worldSize, worldSize, 1);
+    return sprite;
+  }
+
+  function makeStarTexture() {
+    const c = document.createElement("canvas");
+    c.width = c.height = 32;
+    const cx = c.getContext("2d");
+    const g = cx.createRadialGradient(16, 16, 0, 16, 16, 16);
+    g.addColorStop(0, "rgba(255,255,255,1)");
+    g.addColorStop(0.4, "rgba(255,255,255,0.9)");
+    g.addColorStop(1, "rgba(255,255,255,0)");
+    cx.fillStyle = g;
+    cx.fillRect(0, 0, 32, 32);
+    return new THREE.CanvasTexture(c);
+  }
+
+  function initScene() {
+    scene = new THREE.Scene();
+
+    camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 1000);
+
+    renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    globeContainer.appendChild(renderer.domElement);
+
+    scene.add(new THREE.AmbientLight(0x404868, 0.55));
+    sunLight = new THREE.DirectionalLight(0xffffff, 1.4);
+    sunLight.position.set(5, 2, 5);
+    scene.add(sunLight);
+
+    earthGroup = new THREE.Group();
+    scene.add(earthGroup);
+
+    const loader = new THREE.TextureLoader();
+    loader.crossOrigin = "anonymous";
+    const earthTexture = loader.load(
+      "https://cdn.jsdelivr.net/gh/mrdoob/three.js@r128/examples/textures/planets/earth_atmos_2048.jpg"
+    );
+    const earthMat = new THREE.MeshPhongMaterial({ map: earthTexture, shininess: 6 });
+    earthMesh = new THREE.Mesh(new THREE.SphereGeometry(EARTH_RADIUS, 64, 64), earthMat);
+    earthGroup.add(earthMesh);
+
+    // dunne sfeerglow
+    const atmoMat = new THREE.MeshBasicMaterial({
+      color: 0x4d9fff,
+      transparent: true,
+      opacity: 0.12,
+      side: THREE.BackSide,
+    });
+    const atmoMesh = new THREE.Mesh(new THREE.SphereGeometry(EARTH_RADIUS * 1.03, 48, 48), atmoMat);
+    earthGroup.add(atmoMesh);
+
+    // "je bent hier"-markering, kind van earthMesh zodat hij automatisch meedraait
+    const markerMat = new THREE.SpriteMaterial({ map: makeStarTexture(), color: 0xff4d4d, depthTest: false });
+    locationMarker = new THREE.Sprite(markerMat);
+    locationMarker.scale.set(0.07, 0.07, 1);
+    locationMarker.visible = false;
+    earthMesh.add(locationMarker);
+
+    addStarSprites();
+    addPlanetSprites();
+
+    window.addEventListener("resize", onResize);
+  }
+
+  function addStarSprites() {
+    const starTex = makeStarTexture();
+    state.starGroup = new THREE.Group();
+    for (const s of BRIGHT_STARS) {
+      const pos = latLonToVector3(s.dec, s.ra, SKY_RADIUS);
+      const opacity = Math.max(0.35, Math.min(1, 1 - (s.mag + 1.5) / 6));
+      const size = Math.max(0.25, 0.55 - s.mag * 0.05) * (SKY_RADIUS / 30);
+      const mat = new THREE.SpriteMaterial({ map: starTex, transparent: true, opacity, depthWrite: false });
+      const sprite = new THREE.Sprite(mat);
+      sprite.position.copy(pos);
+      sprite.scale.set(size, size, 1);
+      state.starGroup.add(sprite);
+    }
+    scene.add(state.starGroup);
+  }
+
+  function addPlanetSprites() {
+    state.planetGroup = new THREE.Group();
+    for (const p of PLANET_BODIES) {
+      const sprite = makeEmojiSprite(p.emoji, p.body === "Sun" ? 2.6 : p.body === "Moon" ? 1.8 : 1.4);
+      sprite.position.set(0, 0, SKY_RADIUS * 0.94);
+      state.planetGroup.add(sprite);
+      planetSprites[p.body] = sprite;
+    }
+    scene.add(state.planetGroup);
+  }
+
+  function updateCelestialBodies() {
+    if (typeof Astronomy === "undefined") return;
     const time = Astronomy.MakeTime(new Date());
-    const observer = new Astronomy.Observer(state.lat, state.lon, state.heightM || 0);
-    const out = [];
+    const observer = new Astronomy.Observer(state.lat || 0, state.lon || 0, state.heightM || 0);
+
     for (const p of PLANET_BODIES) {
       try {
         const eq = Astronomy.Equator(p.body, time, observer, true, true);
-        const hor = Astronomy.Horizon(time, observer, eq.ra, eq.dec, "normal");
-        if (hor.altitude < -2) continue;
-        out.push({
-          name: p.name,
-          az: hor.azimuth,
-          alt: hor.altitude,
-          type: p.body === "Sun" ? "sun" : p.body === "Moon" ? "moon" : "planet",
-        });
+        const pos = latLonToVector3(eq.dec, eq.ra * 15, SKY_RADIUS * 0.94);
+        planetSprites[p.body].position.copy(pos);
       } catch (err) {
-        console.warn("planeetberekening mislukt voor", p.body, err);
+        console.warn("kon positie niet berekenen voor", p.body, err);
       }
     }
-    return out;
-  }
 
-  function getStarObjects() {
-    if (state.lat == null || typeof Astronomy === "undefined") return [];
-    const time = Astronomy.MakeTime(new Date());
-    const observer = new Astronomy.Observer(state.lat, state.lon, state.heightM || 0);
-    const out = [];
-    for (const s of BRIGHT_STARS) {
-      try {
-        const hor = Astronomy.Horizon(time, observer, s.ra, s.dec, "normal");
-        if (hor.altitude < -2) continue;
-        out.push({ name: s.name, az: hor.azimuth, alt: hor.altitude, type: "star", mag: s.mag });
-      } catch (err) {
-        console.warn("sterberekening mislukt voor", s.name, err);
-      }
-    }
-    return out;
-  }
-
-  // ---------- tekenen ----------
-
-  function collectObjects() {
-    let objs = [];
-    if (state.layers.planes) objs = objs.concat(state.planes);
-    if (state.layers.planets) objs = objs.concat(getPlanetObjects());
-    if (state.layers.stars) objs = objs.concat(getStarObjects());
-    return objs;
-  }
-
-  function styleFor(obj) {
-    switch (obj.type) {
-      case "plane":
-        return { icon: "✈️", color: "#8fd3ff" };
-      case "sun":
-        return { icon: "☀️", color: "#ffd35c" };
-      case "moon":
-        return { icon: "🌕", color: "#f0f0f0" };
-      case "planet":
-        return { icon: "🪐", color: "#ffb27a" };
-      case "star":
-        return { icon: "✦", color: "#ffffff" };
-      default:
-        return { icon: "•", color: "#ffffff" };
+    // zonlicht komt van de echte richting van de zon
+    try {
+      const sunEq = Astronomy.Equator("Sun", time, observer, true, true);
+      const sunDir = latLonToVector3(sunEq.dec, sunEq.ra * 15, 10);
+      sunLight.position.copy(sunDir);
+    } catch (err) {
+      console.warn("kon zonrichting niet berekenen", err);
     }
   }
 
-  function resizeCanvas() {
-    canvas.width = window.innerWidth;
-    canvas.height = window.innerHeight;
+  function placeLocationMarker() {
+    if (state.lat == null || !locationMarker) return;
+    const pos = latLonToVector3(state.lat, state.lon, EARTH_RADIUS * 1.02);
+    locationMarker.position.copy(pos);
+    locationMarker.visible = true;
   }
 
-  // Polair: rand = horizon (alt 0), rand van de globe = recht omhoog (alt 90),
-  // hoek = kompasrichting, noord boven. De globe zelf vult het midden zodat
-  // niets "achter de aarde" verdwijnt.
-  function domeGeometry() {
-    const w = canvas.width, h = canvas.height;
-    const cx = w / 2;
-    const cy = h / 2 + 10;
-    const R = Math.min(w, h) * 0.47;
-    const globeR = R * 0.55;
-    return { w, h, cx, cy, R, globeR };
+  function onResize() {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
   }
 
-  function project(az, alt, geo) {
-    const clampedAlt = Math.max(0, Math.min(90, alt));
-    const r = geo.globeR + (geo.R - geo.globeR) * (1 - clampedAlt / 90);
-    const θ = rad(az);
-    return { x: geo.cx + r * Math.sin(θ), y: geo.cy - r * Math.cos(θ) };
-  }
+  let camAngle = 0;
+  function animate() {
+    requestAnimationFrame(animate);
 
-  let globeBitmap = null;
-  let globeBitmapKey = "";
+    const gmstRad = gmstDegrees(new Date()) * DEG2RAD;
+    earthGroup.rotation.y = gmstRad;
 
-  function ensureGlobeBitmap(diameter) {
-    if (!EarthGlobe.isReady()) return null;
-    const lat0 = state.lat != null ? state.lat : 25;
-    const lon0 = state.lon != null ? state.lon : 15;
-    const key = Math.round(diameter) + "|" + Math.round(lat0) + "|" + Math.round(lon0);
-    if (key !== globeBitmapKey) {
-      globeBitmap = EarthGlobe.render(diameter, lat0, lon0);
-      globeBitmapKey = key;
-    }
-    return globeBitmap;
-  }
+    camAngle += 0.0009;
+    const camDist = 3.3;
+    camera.position.set(
+      camDist * Math.sin(camAngle),
+      camDist * 0.26,
+      camDist * Math.cos(camAngle)
+    );
+    camera.lookAt(0, 0, 0);
 
-  const DIRS = [
-    [0, "N"], [45, "NO"], [90, "O"], [135, "ZO"],
-    [180, "Z"], [225, "ZW"], [270, "W"], [315, "NW"],
-  ];
-  const ALT_RINGS = [0, 30, 60];
+    state.planetGroup.visible = state.layers.planets;
+    state.starGroup.visible = state.layers.stars;
 
-  function draw() {
-    const { w, h, cx, cy, R, globeR } = domeGeometry();
-    ctx.clearRect(0, 0, w, h);
+    renderer.render(scene, camera);
 
-    const bg = ctx.createRadialGradient(cx, cy, 0, cx, cy, R * 1.15);
-    bg.addColorStop(0, "#0c1636");
-    bg.addColorStop(1, "#01030a");
-    ctx.fillStyle = bg;
-    ctx.fillRect(0, 0, w, h);
-
-    // hoogte-ringen (rond de globe, niet erover)
-    ctx.strokeStyle = "rgba(255,255,255,0.18)";
-    ctx.fillStyle = "rgba(255,255,255,0.5)";
-    ctx.font = "11px sans-serif";
-    ctx.textAlign = "center";
-    for (const altVal of ALT_RINGS) {
-      const r = globeR + (R - globeR) * (1 - altVal / 90);
-      ctx.beginPath();
-      ctx.arc(cx, cy, r, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.fillText(altVal + "°", cx, cy - r + 12);
-    }
-
-    // de aarde zelf, in het midden
-    const globe = ensureGlobeBitmap(globeR * 2);
-    if (globe) {
-      ctx.drawImage(globe.canvas, cx - globe.size / 2, cy - globe.size / 2, globe.size, globe.size);
-    } else {
-      const placeholder = ctx.createRadialGradient(
-        cx - globeR * 0.3, cy - globeR * 0.3, globeR * 0.1,
-        cx, cy, globeR
-      );
-      placeholder.addColorStop(0, "#3a6ea8");
-      placeholder.addColorStop(0.6, "#1c4a7a");
-      placeholder.addColorStop(1, "#0a1f38");
-      ctx.beginPath();
-      ctx.arc(cx, cy, globeR, 0, Math.PI * 2);
-      ctx.fillStyle = placeholder;
-      ctx.fill();
-    }
-
-    // kompasrichtingen rondom de rand
-    ctx.font = "13px sans-serif";
-    for (const [dirAz, label] of DIRS) {
-      const θ = rad(dirAz);
-      const lx = cx + (R + 16) * Math.sin(θ);
-      const ly = cy - (R + 16) * Math.cos(θ);
-      ctx.fillStyle = dirAz % 90 === 0 ? "rgba(255,255,255,0.9)" : "rgba(255,255,255,0.5)";
-      ctx.fillText(label, lx, ly + 4);
-    }
-
-    const objects = collectObjects();
-    for (const obj of objects) {
-      const { x, y } = project(obj.az, obj.alt, { cx, cy, R, globeR });
-      const { icon, color } = styleFor(obj);
-      const dimAlpha = obj.type === "star" ? Math.max(0.35, 1 - (obj.mag + 1.5) / 6) : 1;
-
-      ctx.globalAlpha = dimAlpha;
-      ctx.font = obj.type === "star" ? "15px sans-serif" : "22px sans-serif";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText(icon, x, y);
-
-      ctx.globalAlpha = 1;
-      ctx.font = "11px sans-serif";
-      ctx.fillStyle = color;
-      ctx.shadowColor = "rgba(0,0,0,0.9)";
-      ctx.shadowBlur = 4;
-      ctx.fillText(obj.name, x, y + 16);
-      if (obj.info) {
-        ctx.font = "9px sans-serif";
-        ctx.fillStyle = "rgba(255,255,255,0.8)";
-        ctx.fillText(obj.info, x, y + 28);
-      }
-      ctx.shadowBlur = 0;
-    }
-
-    planeCountEl.textContent = `✈️ ${state.planes.length}/${state.planesRawCount}`;
     timeReadout.textContent = new Date().toLocaleTimeString("nl-NL", { hour: "2-digit", minute: "2-digit" });
-
-    if (state.planeError && state.layers.planes) {
-      showWarning(state.planeError);
-    } else if (state.layers.planes && state.planesFetched && state.planesRawCount === 0) {
-      showWarning("Geen vliegtuigen gevonden in de buurt op dit moment (geen fout, gewoon leeg).");
-    } else {
-      clearWarning();
-    }
-
-    requestAnimationFrame(draw);
   }
 
   // ---------- UI ----------
@@ -360,10 +359,9 @@
       const layer = btn.dataset.layer;
       state.layers[layer] = !state.layers[layer];
       btn.classList.toggle("active", state.layers[layer]);
+      if (layer === "planes") planePanel.classList.toggle("hidden", !state.layers.planes);
     });
   });
-
-  window.addEventListener("resize", resizeCanvas);
 
   startBtn.addEventListener("click", async () => {
     startBtn.disabled = true;
@@ -373,14 +371,20 @@
       state.lat = pos.coords.latitude;
       state.lon = pos.coords.longitude;
       state.heightM = pos.coords.altitude || 0;
+      locReadout.textContent = `📍 ${state.lat.toFixed(3)}, ${state.lon.toFixed(3)}`;
+
+      initScene();
+      placeLocationMarker();
+      updateCelestialBodies();
+      setInterval(updateCelestialBodies, 30000);
 
       startWatchingLocation();
       startPlanePolling();
-      resizeCanvas();
+      planePanel.classList.remove("hidden");
 
       startScreen.classList.add("hidden");
       skyScreen.classList.remove("hidden");
-      requestAnimationFrame(draw);
+      animate();
     } catch (err) {
       console.error(err);
       startStatus.textContent = "Kon niet starten: " + err.message;

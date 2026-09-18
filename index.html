@@ -4,25 +4,24 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>Hemelkijker</title>
-<meta name="description" content="Zie in één overzicht welke vliegtuigen, planeten en sterren nu boven je zijn." />
+<meta name="description" content="Een levende 3D-aarde met de sterren, planeten en vliegtuigen van nu er omheen." />
 <link rel="stylesheet" href="style.css" />
 </head>
 <body>
 
   <div id="start-screen" class="screen">
     <h1>🔭 Hemelkijker</h1>
-    <p>Zie in één overzicht welke vliegtuigen, planeten en sterren nu boven je zijn.
-       Geen richten of kantelen nodig — het midden is recht omhoog, de rand is de horizon.</p>
+    <p>Een digitale aarde, met de sterren en planeten van dit moment er echt omheen —
+       en de vliegtuigen die nu in de buurt vliegen.</p>
     <button id="start-btn">Start</button>
     <p id="start-status" class="status"></p>
-    <p class="hint">Werkt het beste buiten, bij helder weer, 's avonds voor sterren.</p>
+    <p class="hint">Werkt overal, geen richten of kantelen nodig.</p>
   </div>
 
   <div id="sky-screen" class="screen hidden">
-    <canvas id="sky"></canvas>
+    <div id="globe-container"></div>
 
     <div id="topbar">
-      <span id="plane-count">✈️ …</span>
       <span id="time-readout">--:--</span>
       <span id="loc-readout">📍 …</span>
     </div>
@@ -33,12 +32,15 @@
       <button data-layer="stars" class="layer-btn active">⭐</button>
     </div>
 
-    <div id="warning" class="hidden"></div>
+    <div id="plane-panel" class="hidden">
+      <h3>✈️ Vliegtuigen in de buurt</h3>
+      <div id="plane-list"></div>
+    </div>
   </div>
 
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/astronomy-engine@2/astronomy.browser.js"></script>
   <script src="stars.js"></script>
-  <script src="globe.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
