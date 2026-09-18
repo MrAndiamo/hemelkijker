@@ -4,15 +4,15 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>Hemelkijker</title>
-<meta name="description" content="Hou je telefoon omhoog en zie welke vliegtuigen, planeten en sterren daar zijn." />
+<meta name="description" content="Zie in één overzicht welke vliegtuigen, planeten en sterren nu boven je zijn." />
 <link rel="stylesheet" href="style.css" />
 </head>
 <body>
 
   <div id="start-screen" class="screen">
     <h1>🔭 Hemelkijker</h1>
-    <p>Hou je telefoon rechtop (portret) en omhoog, en zie welke vliegtuigen,
-       planeten en sterren precies in die richting staan.</p>
+    <p>Zie in één overzicht welke vliegtuigen, planeten en sterren nu boven je zijn.
+       Geen richten of kantelen nodig — het midden is recht omhoog, de rand is de horizon.</p>
     <button id="start-btn">Start</button>
     <p id="start-status" class="status"></p>
     <p class="hint">Werkt het beste buiten, bij helder weer, 's avonds voor sterren.</p>
@@ -22,8 +22,8 @@
     <canvas id="sky"></canvas>
 
     <div id="topbar">
-      <span id="heading-readout">--°</span>
-      <span id="pitch-readout">--°</span>
+      <span id="plane-count">✈️ …</span>
+      <span id="time-readout">--:--</span>
       <span id="loc-readout">📍 …</span>
     </div>
 

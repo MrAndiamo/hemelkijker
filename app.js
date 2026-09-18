@@ -1,8 +1,8 @@
-/* Hemelkijker — kompas-weergave van vliegtuigen, planeten en sterren.
+/* Hemelkijker — vaste "sky dome"-weergave van vliegtuigen, planeten en sterren.
  *
- * Aanname: telefoon wordt rechtop (portret) vastgehouden, met de achterkant
- * (of de bovenrand) richting de lucht gekanteld — niet gedraaid om de lengte-as.
- * Dat maakt de kompas/pitch-berekening simpel en robuust genoeg voor dit doel.
+ * Geen kompas/kanteling nodig: het midden van de cirkel is recht boven je
+ * (zenit), de rand is de horizon, en de hoek rondom is het kompaskwadrant
+ * (noord boven, vast). Alles dat nu boven je is staat gewoon meteen in beeld.
  *
  * Uitbreiden: voeg een nieuwe "layer" toe door 1) een knop in index.html,
  * 2) een fetch/berekenfunctie die {name, az, alt, type, info} teruggeeft,
@@ -12,16 +12,14 @@
 (function () {
   "use strict";
 
-  const FOV_H = 70; // horizontale kijkhoek in graden die het scherm breed toont
-
   const state = {
     lat: null,
     lon: null,
     heightM: 0,
-    heading: 0, // gefilterde kompasrichting (0=N, 90=O)
-    pitch: 0,   // gefilterde omhoog/omlaag-hoek (0=horizon, 90=recht omhoog)
     layers: { planes: true, planets: true, stars: true },
     planes: [],
+    planesRawCount: 0,
+    planesFetched: false,
     planeError: null,
   };
 
@@ -31,8 +29,8 @@
   const startStatus = document.getElementById("start-status");
   const canvas = document.getElementById("sky");
   const ctx = canvas.getContext("2d");
-  const headingReadout = document.getElementById("heading-readout");
-  const pitchReadout = document.getElementById("pitch-readout");
+  const planeCountEl = document.getElementById("plane-count");
+  const timeReadout = document.getElementById("time-readout");
   const locReadout = document.getElementById("loc-readout");
   const warningEl = document.getElementById("warning");
 
@@ -44,17 +42,6 @@
   function normalizeDeg(a) {
     a = a % 360;
     return a < 0 ? a + 360 : a;
-  }
-
-  // kleinste hoekverschil a-b, resultaat in -180..180
-  function angleDiff(a, b) {
-    let d = normalizeDeg(a - b);
-    if (d > 180) d -= 360;
-    return d;
-  }
-
-  function lerpAngle(current, target, t) {
-    return normalizeDeg(current + angleDiff(target, current) * t);
   }
 
   function showWarning(msg) {
@@ -94,42 +81,6 @@
     );
   }
 
-  // ---------- oriëntatie (kompas + kanteling) ----------
-
-  function handleOrientation(event) {
-    let heading;
-    if (typeof event.webkitCompassHeading === "number" && !isNaN(event.webkitCompassHeading)) {
-      heading = event.webkitCompassHeading; // iOS: al kloksgewijs vanaf noord
-    } else if (event.alpha !== null) {
-      heading = 360 - event.alpha; // Android/Chrome-conventie
-    } else {
-      return;
-    }
-    heading = normalizeDeg(heading);
-
-    let pitch = 0;
-    if (event.beta !== null) {
-      pitch = event.beta - 90; // rechtop vasthouden => beta ~90 => pitch ~0 (horizon)
-      pitch = Math.max(-90, Math.min(90, pitch));
-    }
-
-    state.heading = lerpAngle(state.heading, heading, 0.25);
-    state.pitch = state.pitch + (pitch - state.pitch) * 0.25;
-  }
-
-  async function enableOrientation() {
-    const DOE = window.DeviceOrientationEvent;
-    if (DOE && typeof DOE.requestPermission === "function") {
-      const perm = await DOE.requestPermission();
-      if (perm !== "granted") throw new Error("Toestemming voor sensoren geweigerd");
-    }
-    if ("ondeviceorientationabsolute" in window) {
-      window.addEventListener("deviceorientationabsolute", handleOrientation, true);
-    } else {
-      window.addEventListener("deviceorientation", handleOrientation, true);
-    }
-  }
-
   // ---------- vliegtuigen (OpenSky Network) ----------
 
   function haversineBearingDistance(lat1, lon1, lat2, lon2) {
@@ -144,8 +95,6 @@
     return { distance, bearing };
   }
 
-  let planePollFailures = 0;
-
   async function updatePlanes() {
     if (state.lat == null || state.lon == null) return;
     const delta = 1.2; // ~130 km box rond de gebruiker
@@ -157,6 +106,7 @@
       if (!res.ok) throw new Error("HTTP " + res.status);
       const data = await res.json();
       const rows = data.states || [];
+      state.planesRawCount = rows.length;
       state.planes = rows
         .filter((s) => s[5] != null && s[6] != null && !s[8])
         .map((s) => {
@@ -173,22 +123,19 @@
             info: `${Math.round(distance / 1000)} km · ${Math.round(altM)} m`,
           };
         })
-        .filter((p) => p.alt > -10); // ver onder horizon niet tonen
-      planePollFailures = 0;
+        .filter((p) => p.alt > -2);
       state.planeError = null;
     } catch (err) {
-      planePollFailures++;
       state.planeError = "Vliegtuigdata niet beschikbaar (" + err.message + ")";
       console.warn(err);
+    } finally {
+      state.planesFetched = true;
     }
   }
 
   function startPlanePolling() {
     updatePlanes();
-    setInterval(() => {
-      // bij herhaalde fouten iets rustiger pollen om OpenSky niet te bestoken
-      updatePlanes();
-    }, 20000);
+    setInterval(updatePlanes, 20000);
   }
 
   // ---------- planeten & sterren ----------
@@ -212,6 +159,7 @@
       try {
         const eq = Astronomy.Equator(p.body, time, observer, true, true);
         const hor = Astronomy.Horizon(time, observer, eq.ra, eq.dec, "normal");
+        if (hor.altitude < -2) continue;
         out.push({
           name: p.name,
           az: hor.azimuth,
@@ -233,7 +181,7 @@
     for (const s of BRIGHT_STARS) {
       try {
         const hor = Astronomy.Horizon(time, observer, s.ra, s.dec, "normal");
-        if (hor.altitude < -5) continue;
+        if (hor.altitude < -2) continue;
         out.push({ name: s.name, az: hor.azimuth, alt: hor.altitude, type: "star", mag: s.mag });
       } catch (err) {
         console.warn("sterberekening mislukt voor", s.name, err);
@@ -274,78 +222,98 @@
     canvas.height = window.innerHeight;
   }
 
-  function draw() {
+  // Polair: midden = recht omhoog (alt 90), rand = horizon (alt 0), hoek = kompasrichting, noord boven.
+  function domeGeometry() {
     const w = canvas.width, h = canvas.height;
-    const fovV = FOV_H * (h / w);
+    const cx = w / 2;
+    const cy = h / 2 + 10;
+    const R = Math.min(w, h) * 0.42;
+    return { w, h, cx, cy, R };
+  }
 
-    // horizonlijn (alt = 0) t.o.v. huidige pitch
-    const horizonY = h / 2 + (state.pitch / (fovV / 2)) * (h / 2);
+  function project(az, alt, geo) {
+    const clampedAlt = Math.max(0, Math.min(90, alt));
+    const r = geo.R * (1 - clampedAlt / 90);
+    const θ = rad(az);
+    return { x: geo.cx + r * Math.sin(θ), y: geo.cy - r * Math.cos(θ) };
+  }
 
-    const skyGrad = ctx.createLinearGradient(0, 0, 0, Math.max(horizonY, 1));
-    skyGrad.addColorStop(0, "#000308");
-    skyGrad.addColorStop(1, "#12224a");
-    ctx.fillStyle = skyGrad;
-    ctx.fillRect(0, 0, w, Math.max(horizonY, 0));
+  const DIRS = [
+    [0, "N"], [45, "NO"], [90, "O"], [135, "ZO"],
+    [180, "Z"], [225, "ZW"], [270, "W"], [315, "NW"],
+  ];
+  const ALT_RINGS = [0, 30, 60];
 
-    const groundGrad = ctx.createLinearGradient(0, Math.min(horizonY, h), 0, h);
-    groundGrad.addColorStop(0, "#1c1a12");
-    groundGrad.addColorStop(1, "#050503");
-    ctx.fillStyle = groundGrad;
-    ctx.fillRect(0, Math.min(horizonY, h), w, h - Math.min(horizonY, h));
+  function draw() {
+    const { w, h, cx, cy, R } = domeGeometry();
+    ctx.clearRect(0, 0, w, h);
 
-    ctx.strokeStyle = "rgba(255,255,255,0.35)";
-    ctx.lineWidth = 1;
+    const bg = ctx.createRadialGradient(cx, cy, 0, cx, cy, R * 1.15);
+    bg.addColorStop(0, "#0c1636");
+    bg.addColorStop(1, "#01030a");
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, w, h);
+
+    // hoogte-ringen
+    ctx.strokeStyle = "rgba(255,255,255,0.18)";
+    ctx.fillStyle = "rgba(255,255,255,0.5)";
+    ctx.font = "11px sans-serif";
+    ctx.textAlign = "center";
+    for (const altVal of ALT_RINGS) {
+      const r = R * (1 - altVal / 90);
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      ctx.stroke();
+      if (altVal > 0) ctx.fillText(altVal + "°", cx, cy - r + 12);
+    }
     ctx.beginPath();
-    ctx.moveTo(0, horizonY);
-    ctx.lineTo(w, horizonY);
-    ctx.stroke();
+    ctx.arc(cx, cy, 2, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(255,255,255,0.6)";
+    ctx.fill();
 
-    // middenkruis = richting waar de telefoon nu op wijst
-    ctx.strokeStyle = "rgba(255,255,255,0.5)";
-    ctx.beginPath();
-    ctx.moveTo(w / 2 - 12, h / 2);
-    ctx.lineTo(w / 2 + 12, h / 2);
-    ctx.moveTo(w / 2, h / 2 - 12);
-    ctx.lineTo(w / 2, h / 2 + 12);
-    ctx.stroke();
+    // kompasrichtingen rondom de rand
+    ctx.font = "13px sans-serif";
+    for (const [dirAz, label] of DIRS) {
+      const θ = rad(dirAz);
+      const lx = cx + (R + 16) * Math.sin(θ);
+      const ly = cy - (R + 16) * Math.cos(θ);
+      ctx.fillStyle = dirAz % 90 === 0 ? "rgba(255,255,255,0.9)" : "rgba(255,255,255,0.5)";
+      ctx.fillText(label, lx, ly + 4);
+    }
 
     const objects = collectObjects();
     for (const obj of objects) {
-      const dAz = angleDiff(obj.az, state.heading);
-      const dAlt = obj.alt - state.pitch;
-      if (Math.abs(dAz) > FOV_H / 2 + 5 || Math.abs(dAlt) > fovV / 2 + 5) continue;
-
-      const x = w / 2 + (dAz / (FOV_H / 2)) * (w / 2);
-      const y = h / 2 - (dAlt / (fovV / 2)) * (h / 2);
-
+      const { x, y } = project(obj.az, obj.alt, { cx, cy, R });
       const { icon, color } = styleFor(obj);
       const dimAlpha = obj.type === "star" ? Math.max(0.35, 1 - (obj.mag + 1.5) / 6) : 1;
 
       ctx.globalAlpha = dimAlpha;
-      ctx.font = obj.type === "star" ? "16px sans-serif" : "26px sans-serif";
+      ctx.font = obj.type === "star" ? "15px sans-serif" : "22px sans-serif";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       ctx.fillText(icon, x, y);
 
       ctx.globalAlpha = 1;
-      ctx.font = "12px sans-serif";
+      ctx.font = "11px sans-serif";
       ctx.fillStyle = color;
       ctx.shadowColor = "rgba(0,0,0,0.9)";
       ctx.shadowBlur = 4;
-      ctx.fillText(obj.name, x, y + 20);
+      ctx.fillText(obj.name, x, y + 16);
       if (obj.info) {
-        ctx.font = "10px sans-serif";
+        ctx.font = "9px sans-serif";
         ctx.fillStyle = "rgba(255,255,255,0.8)";
-        ctx.fillText(obj.info, x, y + 34);
+        ctx.fillText(obj.info, x, y + 28);
       }
       ctx.shadowBlur = 0;
     }
 
-    headingReadout.textContent = Math.round(state.heading) + "°";
-    pitchReadout.textContent = Math.round(state.pitch) + "°";
+    planeCountEl.textContent = `✈️ ${state.planes.length}/${state.planesRawCount}`;
+    timeReadout.textContent = new Date().toLocaleTimeString("nl-NL", { hour: "2-digit", minute: "2-digit" });
 
     if (state.planeError && state.layers.planes) {
       showWarning(state.planeError);
+    } else if (state.layers.planes && state.planesFetched && state.planesRawCount === 0) {
+      showWarning("Geen vliegtuigen gevonden in de buurt op dit moment (geen fout, gewoon leeg).");
     } else {
       clearWarning();
     }
@@ -367,14 +335,12 @@
 
   startBtn.addEventListener("click", async () => {
     startBtn.disabled = true;
-    startStatus.textContent = "Locatie en sensoren aanvragen…";
+    startStatus.textContent = "Locatie ophalen…";
     try {
       const pos = await requestLocationOnce();
       state.lat = pos.coords.latitude;
       state.lon = pos.coords.longitude;
       state.heightM = pos.coords.altitude || 0;
-
-      await enableOrientation();
 
       startWatchingLocation();
       startPlanePolling();
