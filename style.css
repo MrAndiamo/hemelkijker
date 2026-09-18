@@ -197,6 +197,32 @@ html, body {
   color: #d6dcf5;
 }
 
+.center-btn {
+  display: block;
+  width: 100%;
+  margin-top: 10px;
+  font-size: 0.78rem;
+  padding: 7px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(140, 170, 255, 0.5);
+  background: rgba(74, 125, 255, 0.22);
+  color: #eaf0ff;
+}
+
+.center-badge {
+  position: absolute;
+  top: calc(env(safe-area-inset-top, 0px) + 48px);
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 0.72rem;
+  padding: 5px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 204, 85, 0.5);
+  background: rgba(255, 204, 85, 0.18);
+  color: #ffe3a8;
+  white-space: nowrap;
+}
+
 #info-close-btn {
   position: absolute;
   top: 8px;

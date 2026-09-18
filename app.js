@@ -43,6 +43,8 @@
   const infoNameEl = document.getElementById("info-name");
   const infoBodyEl = document.getElementById("info-body");
   const infoCloseBtn = document.getElementById("info-close-btn");
+  const infoCenterBtn = document.getElementById("info-center-btn");
+  const centerBadge = document.getElementById("center-badge");
   const modeToggleBtn = document.getElementById("mode-toggle-btn");
   const layerToggleEl = document.getElementById("layer-toggle");
 
@@ -180,13 +182,15 @@
 
   let renderer, scene, camera;
   let worldGroup, earthGroup, earthMesh, locationMarker;
-  let solarGroup;
+  let solarGroup, sunPivot;
   let sunLight;
   const planetSprites = {}; // body -> sprite
   const solarSprites = {}; // body -> sprite (zonnestelsel-overzicht)
 
   let viewMode = "earth"; // "earth" | "solar"
   let selectedSolarBody = null; // sprite die nu gevolgd/uitgelicht wordt, of null
+  let currentInfoData = null; // userData van wat er nu in de info-kaart staat
+  let centerBodyKey = null; // null = zon-centrum (standaard), anders bv. "Mars"
   let cameraAnim = null; // vloeiende overgang bij selecteren/deselecteren
   const cameraLookAt = new THREE.Vector3(0, 0, 0);
 
@@ -306,13 +310,21 @@
     solarGroup.visible = false;
     scene.add(solarGroup);
 
+    // sunPivot bevat de zon en alle baanringen — die staan allemaal vast
+    // t.o.v. de zon (op (0,0,0) in de ruwe, zon-gecentreerde berekening).
+    // Als je op een andere planeet centreert (centerBodyKey) schuift dit
+    // hele groepje mee, zodat de banen blijven kloppen met de nieuwe
+    // herkomst van de scène.
+    sunPivot = new THREE.Group();
+    solarGroup.add(sunPivot);
+
     const sunMesh = new THREE.Mesh(new THREE.SphereGeometry(0.45, 32, 32), new THREE.MeshBasicMaterial({ color: 0xffcc55 }));
-    solarGroup.add(sunMesh);
+    sunPivot.add(sunMesh);
     const sunGlow = new THREE.Sprite(
       new THREE.SpriteMaterial({ map: makeStarTexture(), color: 0xffcc55, transparent: true, opacity: 0.7, depthWrite: false })
     );
     sunGlow.scale.set(2.4, 2.4, 1);
-    solarGroup.add(sunGlow);
+    sunPivot.add(sunGlow);
 
     for (const p of SOLAR_SYSTEM_BODIES) {
       const ringPts = [];
@@ -322,10 +334,10 @@
         ringPts.push(new THREE.Vector3(Math.cos(a) * p.orbitR, 0, Math.sin(a) * p.orbitR));
       }
       const ringGeo = new THREE.BufferGeometry().setFromPoints(ringPts);
-      solarGroup.add(new THREE.LineLoop(ringGeo, new THREE.LineBasicMaterial({ color: 0x44557a, transparent: true, opacity: 0.55 })));
+      sunPivot.add(new THREE.LineLoop(ringGeo, new THREE.LineBasicMaterial({ color: 0x44557a, transparent: true, opacity: 0.55 })));
 
       const sprite = makeEmojiSprite(p.emoji, p.body === "Earth" ? 0.5 : 0.4);
-      sprite.userData = { kind: "solarBody", name: p.name, desc: p.desc, periodDays: p.periodDays, distAU: null };
+      sprite.userData = { kind: "solarBody", name: p.name, desc: p.desc, periodDays: p.periodDays, distAU: null, bodyKey: p.body };
       solarGroup.add(sprite);
       solarSprites[p.body] = sprite;
     }
@@ -334,17 +346,38 @@
   function updateSolarSystemPositions() {
     if (typeof Astronomy === "undefined" || !solarGroup) return;
     const time = Astronomy.MakeTime(new Date());
+    const rawPositions = {};
     for (const p of SOLAR_SYSTEM_BODIES) {
       try {
         const lonRad = Astronomy.EclipticLongitude(p.body, time) * DEG2RAD;
-        const sprite = solarSprites[p.body];
-        sprite.position.set(Math.cos(lonRad) * p.orbitR, 0, Math.sin(lonRad) * p.orbitR);
+        rawPositions[p.body] = new THREE.Vector3(Math.cos(lonRad) * p.orbitR, 0, Math.sin(lonRad) * p.orbitR);
         const hv = Astronomy.HelioVector(p.body, time);
-        sprite.userData.distAU = Math.hypot(hv.x, hv.y, hv.z);
+        solarSprites[p.body].userData.distAU = Math.hypot(hv.x, hv.y, hv.z);
       } catch (err) {
         console.warn("kon zonnestelsel-positie niet berekenen voor", p.body, err);
+        rawPositions[p.body] = new THREE.Vector3();
       }
     }
+
+    // centerBodyKey verschuift de hele weergave: die planeet komt op
+    // (0,0,0) te staan (net als de aarde standaard in de aarde-weergave),
+    // de zon en alle andere planeten worden herberekend t.o.v. haar echte
+    // (schematische) positie.
+    const offset = (centerBodyKey && rawPositions[centerBodyKey]) || new THREE.Vector3();
+    for (const p of SOLAR_SYSTEM_BODIES) {
+      solarSprites[p.body].position.copy(rawPositions[p.body]).sub(offset);
+    }
+    sunPivot.position.set(0, 0, 0).sub(offset);
+  }
+
+  function updateCenterBadge() {
+    if (!centerBodyKey) {
+      centerBadge.classList.add("hidden");
+      return;
+    }
+    const def = SOLAR_SYSTEM_BODIES.find((b) => b.body === centerBodyKey);
+    centerBadge.textContent = `🎯 ${def ? def.name : centerBodyKey} is nu het centrum — tik om terug te gaan naar de zon`;
+    centerBadge.classList.remove("hidden");
   }
 
   function addStarSprites() {
@@ -562,11 +595,19 @@
       const kmText = data.distAU != null ? Math.round(data.distAU * AU_IN_KM).toLocaleString("nl-NL") + " km" : "…";
       infoBodyEl.textContent = `${data.desc} Nu ongeveer ${kmText} van de aarde.`;
     }
+    currentInfoData = data;
+    if (data.kind === "solarBody" && data.bodyKey) {
+      infoCenterBtn.classList.remove("hidden");
+      infoCenterBtn.textContent = data.bodyKey === centerBodyKey ? "↩️ Terug naar zon-centrum" : "🎯 Maak dit het centrum";
+    } else {
+      infoCenterBtn.classList.add("hidden");
+    }
     infoCard.classList.remove("hidden");
   }
 
   function hideInfoCard() {
     infoCard.classList.add("hidden");
+    currentInfoData = null;
   }
 
   // ---------- zonnestelsel: selecteren + camera-vlucht ----------
@@ -661,6 +702,21 @@
     else hideInfoCard();
   });
 
+  infoCenterBtn.addEventListener("click", () => {
+    if (!currentInfoData || !currentInfoData.bodyKey) return;
+    centerBodyKey = centerBodyKey === currentInfoData.bodyKey ? null : currentInfoData.bodyKey;
+    updateSolarSystemPositions();
+    updateCenterBadge();
+    deselectSolarBody(); // camera terug naar overzicht — dat draait nu om het nieuwe centrum
+  });
+
+  centerBadge.addEventListener("click", () => {
+    centerBodyKey = null;
+    updateSolarSystemPositions();
+    updateCenterBadge();
+    deselectSolarBody();
+  });
+
   modeToggleBtn.addEventListener("click", () => {
     viewMode = viewMode === "earth" ? "solar" : "earth";
     worldGroup.visible = viewMode === "earth";
@@ -670,6 +726,11 @@
     selectedSolarBody = null;
     cameraAnim = null;
     hideInfoCard();
+    if (viewMode === "earth") {
+      centerBodyKey = null;
+      updateSolarSystemPositions();
+      updateCenterBadge();
+    }
     modeToggleBtn.textContent = viewMode === "earth" ? "🌞 Zonnestelsel" : "🌍 Aarde";
     camDist = viewMode === "solar" ? 12 : 3.3;
   });
