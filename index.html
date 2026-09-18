@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Hemelkijker</title>
+<meta name="description" content="Hou je telefoon omhoog en zie welke vliegtuigen, planeten en sterren daar zijn." />
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <div id="start-screen" class="screen">
+    <h1>🔭 Hemelkijker</h1>
+    <p>Hou je telefoon rechtop (portret) en omhoog, en zie welke vliegtuigen,
+       planeten en sterren precies in die richting staan.</p>
+    <button id="start-btn">Start</button>
+    <p id="start-status" class="status"></p>
+    <p class="hint">Werkt het beste buiten, bij helder weer, 's avonds voor sterren.</p>
+  </div>
+
+  <div id="sky-screen" class="screen hidden">
+    <canvas id="sky"></canvas>
+
+    <div id="topbar">
+      <span id="heading-readout">--°</span>
+      <span id="pitch-readout">--°</span>
+      <span id="loc-readout">📍 …</span>
+    </div>
+
+    <div id="layer-toggle">
+      <button data-layer="planes" class="layer-btn active">✈️</button>
+      <button data-layer="planets" class="layer-btn active">🪐</button>
+      <button data-layer="stars" class="layer-btn active">⭐</button>
+    </div>
+
+    <div id="warning" class="hidden"></div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/astronomy-engine@2/astronomy.browser.js"></script>
+  <script src="stars.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
