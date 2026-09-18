@@ -526,7 +526,7 @@
       el.setPointerCapture(e.pointerId);
       pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
       if (pointers.size === 1) {
-        gesture = { startX: e.clientX, startY: e.clientY, maxMove: 0, multiTouch: false };
+        gesture = { startX: e.clientX, startY: e.clientY, maxMove: 0, multiTouch: false, pointerType: e.pointerType };
       } else if (gesture) {
         gesture.multiTouch = true;
       }
@@ -557,12 +557,26 @@
       rebaselinePinchIfNeeded(); // dekt 3->2; bij 2->1 of 1->0 doet dit niets
 
       if (wasSingle && gesture && !gesture.multiTouch && gesture.maxMove < TAP_MAX_MOVE) {
-        handleTap(e.clientX, e.clientY);
+        handleTap(e.clientX, e.clientY, gesture.pointerType);
       }
       if (pointers.size === 0) gesture = null;
     }
     el.addEventListener("pointerup", endPointer);
     el.addEventListener("pointercancel", endPointer);
+
+    // Muizen geven een betrouwbaar, browser-eigen dblclick-event — dat
+    // gebruiken we rechtstreeks om te centreren, in plaats van zelf de tijd
+    // tussen twee losse klikken te schatten (dat bleek onbetrouwbaar: de
+    // camera-vlucht van de eerste klik verschuift het doelwit al voordat de
+    // tweede klik binnenkomt). Voor touch (geen dblclick-event) blijft
+    // handleTap() zelf dubbeltikken herkennen op timing.
+    el.addEventListener("dblclick", (e) => {
+      if (viewMode !== "solar") return;
+      let best = { dist: 24, data: null, sprite: null };
+      best = nearestSpriteInGroup(solarGroup, e.clientX, e.clientY, best);
+      best = nearestSpriteInGroup(solarStarGroup, e.clientX, e.clientY, best);
+      if (best.data) acceptCenter(best);
+    });
   }
 
   // ---------- tik-to-inspect ----------
@@ -590,21 +604,26 @@
     return best;
   }
 
-  const DOUBLE_TAP_MS = 350;
+  const DOUBLE_TAP_MS = 450;
   let lastTap = { sprite: null, time: 0 };
 
-  function handleTap(clientX, clientY) {
+  function handleTap(clientX, clientY, pointerType) {
     let best = { dist: 24, data: null, sprite: null }; // 24px tik-tolerantie
 
     if (viewMode === "solar") {
       best = nearestSpriteInGroup(solarGroup, clientX, clientY, best);
       best = nearestSpriteInGroup(solarStarGroup, clientX, clientY, best);
       if (best.data) {
-        const now = performance.now();
-        const isDoubleTap = lastTap.sprite === best.sprite && now - lastTap.time < DOUBLE_TAP_MS;
-        lastTap = { sprite: best.sprite, time: now };
-        if (isDoubleTap) acceptCenter(best);
-        else selectSolarBody(best);
+        if (pointerType === "mouse") {
+          // dubbelklikken wordt afgehandeld door de aparte "dblclick"-listener
+          selectSolarBody(best);
+        } else {
+          const now = performance.now();
+          const isDoubleTap = lastTap.sprite === best.sprite && now - lastTap.time < DOUBLE_TAP_MS;
+          lastTap = { sprite: best.sprite, time: now };
+          if (isDoubleTap) acceptCenter(best);
+          else selectSolarBody(best);
+        }
       } else {
         lastTap = { sprite: null, time: 0 };
         deselectSolarBody();
