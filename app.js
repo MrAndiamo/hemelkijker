@@ -332,7 +332,7 @@
   // ---------- zoom (scrollwiel + pinch) ----------
 
   const ZOOM_MIN = 1.35;
-  const ZOOM_MAX = 14;
+  const ZOOM_MAX = 55; // ver voorbij SKY_RADIUS (30), zodat de hele sterrenbol in beeld past
   let camDist = 3.3;
   let pinchStartDist = null;
   let pinchStartCamDist = null;
