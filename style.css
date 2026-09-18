@@ -197,18 +197,6 @@ html, body {
   color: #d6dcf5;
 }
 
-.center-btn {
-  display: block;
-  width: 100%;
-  margin-top: 10px;
-  font-size: 0.78rem;
-  padding: 7px 10px;
-  border-radius: 8px;
-  border: 1px solid rgba(140, 170, 255, 0.5);
-  background: rgba(74, 125, 255, 0.22);
-  color: #eaf0ff;
-}
-
 .center-badge {
   position: absolute;
   top: calc(env(safe-area-inset-top, 0px) + 48px);
