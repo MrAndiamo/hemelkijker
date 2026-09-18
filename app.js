@@ -16,6 +16,8 @@
   const DEG2RAD = Math.PI / 180;
   const EARTH_RADIUS = 1;
   const SKY_RADIUS = 30;
+  const WORLD_Y = new THREE.Vector3(0, 1, 0);
+  let lastGmstRad = 0;
 
   const state = {
     lat: null,
@@ -37,6 +39,10 @@
   const locReadout = document.getElementById("loc-readout");
   const planePanel = document.getElementById("plane-panel");
   const planeListEl = document.getElementById("plane-list");
+  const infoCard = document.getElementById("info-card");
+  const infoNameEl = document.getElementById("info-name");
+  const infoBodyEl = document.getElementById("info-body");
+  const infoCloseBtn = document.getElementById("info-close-btn");
 
   // ---------- tijd / astronomie helpers ----------
 
@@ -176,14 +182,15 @@
   const planetSprites = {}; // body -> sprite
 
   const PLANET_BODIES = [
-    { body: "Sun", name: "Zon", emoji: "☀️" },
-    { body: "Moon", name: "Maan", emoji: "🌕" },
-    { body: "Mercury", name: "Mercurius", emoji: "🪐" },
-    { body: "Venus", name: "Venus", emoji: "🪐" },
-    { body: "Mars", name: "Mars", emoji: "🪐" },
-    { body: "Jupiter", name: "Jupiter", emoji: "🪐" },
-    { body: "Saturn", name: "Saturnus", emoji: "🪐" },
+    { body: "Sun", name: "Zon", emoji: "☀️", desc: "Onze eigen ster — het licht dat je nu ziet vertrok hier zo'n 8 minuten geleden." },
+    { body: "Moon", name: "Maan", emoji: "🌕", desc: "Aardes enige natuurlijke maan, op ongeveer 1 lichtseconde afstand." },
+    { body: "Mercury", name: "Mercurius", emoji: "🪐", desc: "De kleinste en meest binnenste planeet van het zonnestelsel." },
+    { body: "Venus", name: "Venus", emoji: "🪐", desc: "De heetste planeet — een dik broeikas-atmosfeer houdt de warmte vast." },
+    { body: "Mars", name: "Mars", emoji: "🪐", desc: "De rode planeet, genoemd naar de Romeinse oorlogsgod." },
+    { body: "Jupiter", name: "Jupiter", emoji: "🪐", desc: "De grootste planeet van het zonnestelsel." },
+    { body: "Saturn", name: "Saturnus", emoji: "🪐", desc: "Bekend van zijn ringen (hier alleen als icoon te zien, niet als plaatje)." },
   ];
+  const AU_IN_KM = 149597870.7;
 
   function makeEmojiSprite(emoji, worldSize) {
     const c = document.createElement("canvas");
@@ -230,6 +237,8 @@
 
     earthGroup = new THREE.Group();
     scene.add(earthGroup);
+    lastGmstRad = gmstDegrees(new Date()) * DEG2RAD;
+    earthGroup.rotateOnWorldAxis(WORLD_Y, lastGmstRad); // astronomisch correcte startoriëntatie
 
     const loader = new THREE.TextureLoader();
     loader.crossOrigin = "anonymous";
@@ -261,7 +270,7 @@
     addPlanetSprites();
 
     window.addEventListener("resize", onResize);
-    setupZoomControls(renderer.domElement);
+    setupPointerControls(renderer.domElement);
   }
 
   function addStarSprites() {
@@ -275,6 +284,7 @@
       const sprite = new THREE.Sprite(mat);
       sprite.position.copy(pos);
       sprite.scale.set(size, size, 1);
+      sprite.userData = { kind: "star", name: s.name, mag: s.mag };
       state.starGroup.add(sprite);
     }
     scene.add(state.starGroup);
@@ -285,6 +295,7 @@
     for (const p of PLANET_BODIES) {
       const sprite = makeEmojiSprite(p.emoji, p.body === "Sun" ? 2.6 : p.body === "Moon" ? 1.8 : 1.4);
       sprite.position.set(0, 0, SKY_RADIUS * 0.94);
+      sprite.userData = { kind: "planet", name: p.name, desc: p.desc, distAU: null };
       state.planetGroup.add(sprite);
       planetSprites[p.body] = sprite;
     }
@@ -301,6 +312,7 @@
         const eq = Astronomy.Equator(p.body, time, observer, true, true);
         const pos = latLonToVector3(eq.dec, eq.ra * 15, SKY_RADIUS * 0.94);
         planetSprites[p.body].position.copy(pos);
+        planetSprites[p.body].userData.distAU = eq.dist;
       } catch (err) {
         console.warn("kon positie niet berekenen voor", p.body, err);
       }
@@ -329,19 +341,45 @@
     renderer.setSize(window.innerWidth, window.innerHeight);
   }
 
-  // ---------- zoom (scrollwiel + pinch) ----------
+  // ---------- zoom + aarde-draaien + tik-to-inspect (één pointer-systeem) ----------
 
   const ZOOM_MIN = 1.35;
   const ZOOM_MAX = 55; // ver voorbij SKY_RADIUS (30), zodat de hele sterrenbol in beeld past
+  const ROTATE_SPEED = 0.005;
+  const TAP_MAX_MOVE = 8; // px — verplaatsing hieronder = tik, niet slepen
   let camDist = 3.3;
-  let pinchStartDist = null;
-  let pinchStartCamDist = null;
 
   function clampZoom(v) {
     return Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, v));
   }
 
-  function setupZoomControls(el) {
+  function pointDistance(a, b) {
+    const dx = a.x - b.x, dy = a.y - b.y;
+    return Math.sqrt(dx * dx + dy * dy);
+  }
+
+  function rotateEarthByDrag(dxPixels, dyPixels) {
+    earthGroup.rotateOnWorldAxis(WORLD_Y, dxPixels * ROTATE_SPEED);
+    const right = new THREE.Vector3();
+    camera.matrixWorld.extractBasis(right, new THREE.Vector3(), new THREE.Vector3());
+    earthGroup.rotateOnWorldAxis(right.normalize(), dyPixels * ROTATE_SPEED);
+    earthGroup.quaternion.normalize();
+  }
+
+  function setupPointerControls(el) {
+    const pointers = new Map(); // pointerId -> {x, y}
+    let pinchStartDist = null;
+    let pinchStartCamDist = null;
+    let gesture = null; // info over de lopende aanraking, voor tik-detectie
+
+    function rebaselinePinchIfNeeded() {
+      if (pointers.size === 2) {
+        const pts = [...pointers.values()];
+        pinchStartDist = pointDistance(pts[0], pts[1]);
+        pinchStartCamDist = camDist;
+      }
+    }
+
     el.addEventListener(
       "wheel",
       (e) => {
@@ -351,38 +389,96 @@
       { passive: false }
     );
 
-    el.addEventListener(
-      "touchstart",
-      (e) => {
-        if (e.touches.length === 2) {
-          pinchStartDist = touchDistance(e.touches);
-          pinchStartCamDist = camDist;
-        }
-      },
-      { passive: true }
-    );
-
-    el.addEventListener(
-      "touchmove",
-      (e) => {
-        if (e.touches.length === 2 && pinchStartDist) {
-          e.preventDefault();
-          const d = touchDistance(e.touches);
-          camDist = clampZoom(pinchStartCamDist * (pinchStartDist / d));
-        }
-      },
-      { passive: false }
-    );
-
-    el.addEventListener("touchend", () => {
-      pinchStartDist = null;
+    el.addEventListener("pointerdown", (e) => {
+      if (e.pointerType === "mouse" && e.button !== 0) return; // alleen links-klik roteert/tikt
+      el.setPointerCapture(e.pointerId);
+      pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (pointers.size === 1) {
+        gesture = { startX: e.clientX, startY: e.clientY, maxMove: 0, multiTouch: false };
+      } else if (gesture) {
+        gesture.multiTouch = true;
+      }
+      rebaselinePinchIfNeeded();
     });
+
+    el.addEventListener("pointermove", (e) => {
+      if (!pointers.has(e.pointerId)) return;
+      const prev = pointers.get(e.pointerId);
+      const dx = e.clientX - prev.x, dy = e.clientY - prev.y;
+      pointers.set(e.pointerId, { x: e.clientX, y: e.clientY }); // altijd bijwerken, ook tijdens pinch
+
+      if (pointers.size === 1) {
+        rotateEarthByDrag(dx, dy);
+        if (gesture) {
+          gesture.maxMove = Math.max(gesture.maxMove, pointDistance({ x: e.clientX, y: e.clientY }, { x: gesture.startX, y: gesture.startY }));
+        }
+      } else if (pointers.size === 2 && pinchStartDist) {
+        const pts = [...pointers.values()];
+        const d = pointDistance(pts[0], pts[1]);
+        camDist = clampZoom(pinchStartCamDist * (pinchStartDist / d));
+      }
+    });
+
+    function endPointer(e) {
+      const wasSingle = pointers.size === 1 && pointers.has(e.pointerId);
+      pointers.delete(e.pointerId);
+      rebaselinePinchIfNeeded(); // dekt 3->2; bij 2->1 of 1->0 doet dit niets
+
+      if (wasSingle && gesture && !gesture.multiTouch && gesture.maxMove < TAP_MAX_MOVE) {
+        handleTap(e.clientX, e.clientY);
+      }
+      if (pointers.size === 0) gesture = null;
+    }
+    el.addEventListener("pointerup", endPointer);
+    el.addEventListener("pointercancel", endPointer);
   }
 
-  function touchDistance(touches) {
-    const dx = touches[0].clientX - touches[1].clientX;
-    const dy = touches[0].clientY - touches[1].clientY;
-    return Math.sqrt(dx * dx + dy * dy);
+  // ---------- tik-to-inspect ----------
+
+  function projectToScreen(worldPos) {
+    const v = worldPos.clone().project(camera);
+    return {
+      x: (v.x * 0.5 + 0.5) * window.innerWidth,
+      y: (1 - (v.y * 0.5 + 0.5)) * window.innerHeight,
+      z: v.z,
+    };
+  }
+
+  function nearestSpriteInGroup(group, clientX, clientY, bestSoFar) {
+    let best = bestSoFar;
+    for (const sprite of group.children) {
+      const wp = new THREE.Vector3();
+      sprite.getWorldPosition(wp);
+      const sp = projectToScreen(wp);
+      if (sp.z > 1 || sp.z < -1) continue; // buiten beeld / achter de camera
+      const d = Math.hypot(sp.x - clientX, sp.y - clientY);
+      if (d < best.dist) best = { dist: d, data: sprite.userData };
+    }
+    return best;
+  }
+
+  function handleTap(clientX, clientY) {
+    let best = { dist: 24, data: null }; // 24px tik-tolerantie
+    if (state.layers.stars && state.starGroup.visible) best = nearestSpriteInGroup(state.starGroup, clientX, clientY, best);
+    if (state.layers.planets && state.planetGroup.visible) best = nearestSpriteInGroup(state.planetGroup, clientX, clientY, best);
+
+    if (best.data) showInfoCard(best.data);
+    else hideInfoCard();
+  }
+
+  function showInfoCard(data) {
+    infoNameEl.textContent = data.name;
+    if (data.kind === "star") {
+      infoBodyEl.textContent = `Magnitude ${data.mag} — hoe lager, hoe helderder deze ster is.`;
+    } else {
+      const kmText = data.distAU != null ? Math.round(data.distAU * AU_IN_KM).toLocaleString("nl-NL") + " km" : "…";
+      infoBodyEl.textContent = `${data.desc} Nu ongeveer ${kmText} van de aarde.`;
+    }
+    infoCard.classList.remove("hidden");
+  }
+
+  function hideInfoCard() {
+    infoCard.classList.add("hidden");
   }
 
   // Camera staat vast (alleen afstand verandert door zoom) — de zichtbare
@@ -395,13 +491,19 @@
     requestAnimationFrame(animate);
 
     const gmstRad = gmstDegrees(new Date()) * DEG2RAD;
-    earthGroup.rotation.y = gmstRad; // echte, tijd-gebaseerde rotatie (heel langzaam)
+    let gmstDelta = gmstRad - lastGmstRad;
+    // normaliseer naar (-π, π] zodat de dagelijkse 360°->0° wrap geen sprong geeft
+    gmstDelta = ((gmstDelta + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
+    earthGroup.rotateOnWorldAxis(WORLD_Y, gmstDelta); // echte, tijd-gebaseerde rotatie (heel langzaam)
+    earthGroup.quaternion.normalize(); // voorkomt drift na heel veel kleine rotaties over een lange sessie
+    lastGmstRad = gmstRad;
 
     skySpin += 0.0028; // sierlijke, zichtbare omloop: ± 1 ronde per 37s
     state.starGroup.rotation.y = skySpin;
-    state.planetGroup.rotation.y = skySpin;
+    // planeten/zon/maan draaien NIET decoratief mee — die staan op hun echte,
+    // bijna stilstaande astronomische positie (updateCelestialBodies()).
 
-    camera.position.set(0, camDist * 0.22, camDist);
+    camera.position.set(0, camDist * 0.8, camDist);
     camera.lookAt(0, 0, 0);
 
     state.planetGroup.visible = state.layers.planets;
@@ -413,6 +515,8 @@
   }
 
   // ---------- UI ----------
+
+  infoCloseBtn.addEventListener("click", hideInfoCard);
 
   document.querySelectorAll(".layer-btn").forEach((btn) => {
     btn.addEventListener("click", () => {

@@ -158,3 +158,41 @@ html, body {
   font-size: 0.75rem;
 }
 
+#info-card {
+  position: absolute;
+  top: calc(env(safe-area-inset-top, 0px) + 40px);
+  left: 12px;
+  max-width: 220px;
+  background: rgba(8, 12, 26, 0.85);
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 12px;
+  padding: 12px 14px;
+  font-size: 0.82rem;
+  backdrop-filter: blur(4px);
+}
+
+#info-card h3 {
+  margin: 0 0 6px;
+  font-size: 0.95rem;
+  color: #cfe0ff;
+  padding-right: 20px;
+}
+
+#info-card p {
+  margin: 0;
+  line-height: 1.4;
+  color: #d6dcf5;
+}
+
+#info-close-btn {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  background: none;
+  border: none;
+  color: #9aa3c9;
+  font-size: 1rem;
+  line-height: 1;
+  padding: 4px;
+}
+
