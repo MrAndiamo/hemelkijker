@@ -261,6 +261,7 @@
     addPlanetSprites();
 
     window.addEventListener("resize", onResize);
+    setupZoomControls(renderer.domElement);
   }
 
   function addStarSprites() {
@@ -328,6 +329,62 @@
     renderer.setSize(window.innerWidth, window.innerHeight);
   }
 
+  // ---------- zoom (scrollwiel + pinch) ----------
+
+  const ZOOM_MIN = 1.35;
+  const ZOOM_MAX = 14;
+  let camDist = 3.3;
+  let pinchStartDist = null;
+  let pinchStartCamDist = null;
+
+  function clampZoom(v) {
+    return Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, v));
+  }
+
+  function setupZoomControls(el) {
+    el.addEventListener(
+      "wheel",
+      (e) => {
+        e.preventDefault();
+        camDist = clampZoom(camDist * (1 + e.deltaY * 0.0015));
+      },
+      { passive: false }
+    );
+
+    el.addEventListener(
+      "touchstart",
+      (e) => {
+        if (e.touches.length === 2) {
+          pinchStartDist = touchDistance(e.touches);
+          pinchStartCamDist = camDist;
+        }
+      },
+      { passive: true }
+    );
+
+    el.addEventListener(
+      "touchmove",
+      (e) => {
+        if (e.touches.length === 2 && pinchStartDist) {
+          e.preventDefault();
+          const d = touchDistance(e.touches);
+          camDist = clampZoom(pinchStartCamDist * (pinchStartDist / d));
+        }
+      },
+      { passive: false }
+    );
+
+    el.addEventListener("touchend", () => {
+      pinchStartDist = null;
+    });
+  }
+
+  function touchDistance(touches) {
+    const dx = touches[0].clientX - touches[1].clientX;
+    const dy = touches[0].clientY - touches[1].clientY;
+    return Math.sqrt(dx * dx + dy * dy);
+  }
+
   let camAngle = 0;
   function animate() {
     requestAnimationFrame(animate);
@@ -336,7 +393,6 @@
     earthGroup.rotation.y = gmstRad;
 
     camAngle += 0.0009;
-    const camDist = 3.3;
     camera.position.set(
       camDist * Math.sin(camAngle),
       camDist * 0.26,
