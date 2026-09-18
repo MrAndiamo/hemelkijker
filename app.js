@@ -43,6 +43,8 @@
   const infoNameEl = document.getElementById("info-name");
   const infoBodyEl = document.getElementById("info-body");
   const infoCloseBtn = document.getElementById("info-close-btn");
+  const modeToggleBtn = document.getElementById("mode-toggle-btn");
+  const layerToggleEl = document.getElementById("layer-toggle");
 
   // ---------- tijd / astronomie helpers ----------
 
@@ -178,8 +180,15 @@
 
   let renderer, scene, camera;
   let worldGroup, earthGroup, earthMesh, locationMarker;
+  let solarGroup;
   let sunLight;
   const planetSprites = {}; // body -> sprite
+  const solarSprites = {}; // body -> sprite (zonnestelsel-overzicht)
+
+  let viewMode = "earth"; // "earth" | "solar"
+  let selectedSolarBody = null; // sprite die nu gevolgd/uitgelicht wordt, of null
+  let cameraAnim = null; // vloeiende overgang bij selecteren/deselecteren
+  const cameraLookAt = new THREE.Vector3(0, 0, 0);
 
   const PLANET_BODIES = [
     { body: "Sun", name: "Zon", emoji: "☀️", desc: "Onze eigen ster — het licht dat je nu ziet vertrok hier zo'n 8 minuten geleden." },
@@ -191,6 +200,17 @@
     { body: "Saturn", name: "Saturnus", emoji: "🪐", desc: "Bekend van zijn ringen (hier alleen als icoon te zien, niet als plaatje)." },
   ];
   const AU_IN_KM = 149597870.7;
+
+  // Zonnestelsel-overzicht: schematische (niet schaalgetrouwe) baanstralen,
+  // alleen de hoek rond de zon is live/echt (Astronomy.EclipticLongitude).
+  const SOLAR_SYSTEM_BODIES = [
+    { body: "Mercury", name: "Mercurius", emoji: "🪐", orbitR: 1.6, periodDays: 88, desc: "De kleinste en meest binnenste planeet van het zonnestelsel." },
+    { body: "Venus", name: "Venus", emoji: "🪐", orbitR: 2.2, periodDays: 225, desc: "De heetste planeet — een dik broeikas-atmosfeer houdt de warmte vast." },
+    { body: "Earth", name: "Aarde", emoji: "🌍", orbitR: 2.8, periodDays: 365.25, desc: "Onze eigen planeet — de enige die we kennen met leven." },
+    { body: "Mars", name: "Mars", emoji: "🪐", orbitR: 3.6, periodDays: 687, desc: "De rode planeet, genoemd naar de Romeinse oorlogsgod." },
+    { body: "Jupiter", name: "Jupiter", emoji: "🪐", orbitR: 5.2, periodDays: 4333, desc: "De grootste planeet van het zonnestelsel." },
+    { body: "Saturn", name: "Saturnus", emoji: "🪐", orbitR: 6.8, periodDays: 10759, desc: "Bekend van zijn ringen (hier alleen als icoon te zien, niet als plaatje)." },
+  ];
 
   function makeEmojiSprite(emoji, worldSize) {
     const c = document.createElement("canvas");
@@ -275,9 +295,56 @@
 
     addStarSprites();
     addPlanetSprites();
+    addSolarSystemScene();
 
     window.addEventListener("resize", onResize);
     setupPointerControls(renderer.domElement);
+  }
+
+  function addSolarSystemScene() {
+    solarGroup = new THREE.Group();
+    solarGroup.visible = false;
+    scene.add(solarGroup);
+
+    const sunMesh = new THREE.Mesh(new THREE.SphereGeometry(0.45, 32, 32), new THREE.MeshBasicMaterial({ color: 0xffcc55 }));
+    solarGroup.add(sunMesh);
+    const sunGlow = new THREE.Sprite(
+      new THREE.SpriteMaterial({ map: makeStarTexture(), color: 0xffcc55, transparent: true, opacity: 0.7, depthWrite: false })
+    );
+    sunGlow.scale.set(2.4, 2.4, 1);
+    solarGroup.add(sunGlow);
+
+    for (const p of SOLAR_SYSTEM_BODIES) {
+      const ringPts = [];
+      const SEGMENTS = 96;
+      for (let i = 0; i <= SEGMENTS; i++) {
+        const a = (i / SEGMENTS) * Math.PI * 2;
+        ringPts.push(new THREE.Vector3(Math.cos(a) * p.orbitR, 0, Math.sin(a) * p.orbitR));
+      }
+      const ringGeo = new THREE.BufferGeometry().setFromPoints(ringPts);
+      solarGroup.add(new THREE.LineLoop(ringGeo, new THREE.LineBasicMaterial({ color: 0x44557a, transparent: true, opacity: 0.55 })));
+
+      const sprite = makeEmojiSprite(p.emoji, p.body === "Earth" ? 0.5 : 0.4);
+      sprite.userData = { kind: "solarBody", name: p.name, desc: p.desc, periodDays: p.periodDays, distAU: null };
+      solarGroup.add(sprite);
+      solarSprites[p.body] = sprite;
+    }
+  }
+
+  function updateSolarSystemPositions() {
+    if (typeof Astronomy === "undefined" || !solarGroup) return;
+    const time = Astronomy.MakeTime(new Date());
+    for (const p of SOLAR_SYSTEM_BODIES) {
+      try {
+        const lonRad = Astronomy.EclipticLongitude(p.body, time) * DEG2RAD;
+        const sprite = solarSprites[p.body];
+        sprite.position.set(Math.cos(lonRad) * p.orbitR, 0, Math.sin(lonRad) * p.orbitR);
+        const hv = Astronomy.HelioVector(p.body, time);
+        sprite.userData.distAU = Math.hypot(hv.x, hv.y, hv.z);
+      } catch (err) {
+        console.warn("kon zonnestelsel-positie niet berekenen voor", p.body, err);
+      }
+    }
   }
 
   function addStarSprites() {
@@ -417,7 +484,7 @@
       pointers.set(e.pointerId, { x: e.clientX, y: e.clientY }); // altijd bijwerken, ook tijdens pinch
 
       if (pointers.size === 1) {
-        rotateWorldByDrag(dx, dy);
+        if (viewMode === "earth") rotateWorldByDrag(dx, dy);
         if (gesture) {
           gesture.maxMove = Math.max(gesture.maxMove, pointDistance({ x: e.clientX, y: e.clientY }, { x: gesture.startX, y: gesture.startY }));
         }
@@ -456,21 +523,29 @@
   function nearestSpriteInGroup(group, clientX, clientY, bestSoFar) {
     let best = bestSoFar;
     for (const sprite of group.children) {
+      if (!sprite.userData || !sprite.userData.name) continue; // skip baanringen/zon-mesh e.d.
       const wp = new THREE.Vector3();
       sprite.getWorldPosition(wp);
       const sp = projectToScreen(wp);
       if (sp.z > 1 || sp.z < -1) continue; // buiten beeld / achter de camera
       const d = Math.hypot(sp.x - clientX, sp.y - clientY);
-      if (d < best.dist) best = { dist: d, data: sprite.userData };
+      if (d < best.dist) best = { dist: d, data: sprite.userData, sprite };
     }
     return best;
   }
 
   function handleTap(clientX, clientY) {
-    let best = { dist: 24, data: null }; // 24px tik-tolerantie
+    let best = { dist: 24, data: null, sprite: null }; // 24px tik-tolerantie
+
+    if (viewMode === "solar") {
+      best = nearestSpriteInGroup(solarGroup, clientX, clientY, best);
+      if (best.data) selectSolarBody(best);
+      else deselectSolarBody();
+      return;
+    }
+
     if (state.layers.stars && state.starGroup.visible) best = nearestSpriteInGroup(state.starGroup, clientX, clientY, best);
     if (state.layers.planets && state.planetGroup.visible) best = nearestSpriteInGroup(state.planetGroup, clientX, clientY, best);
-
     if (best.data) showInfoCard(best.data);
     else hideInfoCard();
   }
@@ -479,6 +554,10 @@
     infoNameEl.textContent = data.name;
     if (data.kind === "star") {
       infoBodyEl.textContent = `Magnitude ${data.mag} — hoe lager, hoe helderder deze ster is.`;
+    } else if (data.kind === "solarBody") {
+      const kmText = data.distAU != null ? Math.round(data.distAU * AU_IN_KM).toLocaleString("nl-NL") + " km" : "…";
+      const periodText = data.periodDays > 500 ? (data.periodDays / 365.25).toFixed(1) + " jaar" : Math.round(data.periodDays) + " dagen";
+      infoBodyEl.textContent = `${data.desc} Nu ongeveer ${kmText} van de zon. Eén rondje om de zon duurt ${periodText}.`;
     } else {
       const kmText = data.distAU != null ? Math.round(data.distAU * AU_IN_KM).toLocaleString("nl-NL") + " km" : "…";
       infoBodyEl.textContent = `${data.desc} Nu ongeveer ${kmText} van de aarde.`;
@@ -490,6 +569,34 @@
     infoCard.classList.add("hidden");
   }
 
+  // ---------- zonnestelsel: selecteren + camera-vlucht ----------
+
+  function startCameraFlyTo(toPos, toTarget) {
+    cameraAnim = {
+      fromPos: camera.position.clone(),
+      toPos,
+      fromTarget: cameraLookAt.clone(),
+      toTarget,
+      start: performance.now(),
+      duration: 900,
+    };
+  }
+
+  function selectSolarBody(best) {
+    selectedSolarBody = best.sprite;
+    showInfoCard(best.data);
+    const p = best.sprite.position.clone();
+    const dir = p.clone().normalize();
+    const camTo = p.clone().add(dir.multiplyScalar(1.3)).add(new THREE.Vector3(0, 0.55, 0));
+    startCameraFlyTo(camTo, p);
+  }
+
+  function deselectSolarBody() {
+    selectedSolarBody = null;
+    hideInfoCard();
+    startCameraFlyTo(new THREE.Vector3(0, 7, 12), new THREE.Vector3(0, 0, 0));
+  }
+
   // Camera staat vast (alleen afstand verandert door zoom) — de zichtbare
   // beweging komt van de hemelbol zelf die om de aarde draait, niet van een
   // camera die om een stilstaande scène cirkelt (dat zag er plat/links-rechts
@@ -499,24 +606,48 @@
   function animate() {
     requestAnimationFrame(animate);
 
-    const gmstRad = gmstDegrees(new Date()) * DEG2RAD;
-    let gmstDelta = gmstRad - lastGmstRad;
-    // normaliseer naar (-π, π] zodat de dagelijkse 360°->0° wrap geen sprong geeft
-    gmstDelta = ((gmstDelta + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
-    earthGroup.rotateOnWorldAxis(WORLD_Y, gmstDelta); // echte, tijd-gebaseerde rotatie (heel langzaam)
-    earthGroup.quaternion.normalize(); // voorkomt drift na heel veel kleine rotaties over een lange sessie
-    lastGmstRad = gmstRad;
+    if (viewMode === "earth") {
+      const gmstRad = gmstDegrees(new Date()) * DEG2RAD;
+      let gmstDelta = gmstRad - lastGmstRad;
+      // normaliseer naar (-π, π] zodat de dagelijkse 360°->0° wrap geen sprong geeft
+      gmstDelta = ((gmstDelta + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
+      earthGroup.rotateOnWorldAxis(WORLD_Y, gmstDelta); // echte, tijd-gebaseerde rotatie (heel langzaam)
+      earthGroup.quaternion.normalize(); // voorkomt drift na heel veel kleine rotaties over een lange sessie
+      lastGmstRad = gmstRad;
 
-    skySpin += 0.0028; // sierlijke, zichtbare omloop: ± 1 ronde per 37s
-    state.starGroup.rotation.y = skySpin;
-    // planeten/zon/maan draaien NIET decoratief mee — die staan op hun echte,
-    // bijna stilstaande astronomische positie (updateCelestialBodies()).
+      skySpin += 0.0028; // sierlijke, zichtbare omloop: ± 1 ronde per 37s
+      state.starGroup.rotation.y = skySpin;
+      // planeten/zon/maan draaien NIET decoratief mee — die staan op hun echte,
+      // bijna stilstaande astronomische positie (updateCelestialBodies()).
 
-    camera.position.set(0, camDist * 0.8, camDist);
-    camera.lookAt(0, 0, 0);
+      camera.position.set(0, camDist * 0.8, camDist);
+      cameraLookAt.set(0, 0, 0);
+      camera.lookAt(cameraLookAt);
 
-    state.planetGroup.visible = state.layers.planets;
-    state.starGroup.visible = state.layers.stars;
+      state.planetGroup.visible = state.layers.planets;
+      state.starGroup.visible = state.layers.stars;
+    } else {
+      // zonnestelsel-modus: camera volgt de selectie, of toont het overzicht
+      let campos, look;
+      if (cameraAnim) {
+        const t = Math.min(1, (performance.now() - cameraAnim.start) / cameraAnim.duration);
+        const eased = 1 - Math.pow(1 - t, 3);
+        campos = cameraAnim.fromPos.clone().lerp(cameraAnim.toPos, eased);
+        look = cameraAnim.fromTarget.clone().lerp(cameraAnim.toTarget, eased);
+        if (t >= 1) cameraAnim = null;
+      } else if (selectedSolarBody) {
+        const p = selectedSolarBody.position.clone();
+        const dir = p.clone().normalize();
+        campos = p.clone().add(dir.multiplyScalar(1.3)).add(new THREE.Vector3(0, 0.55, 0));
+        look = p;
+      } else {
+        campos = new THREE.Vector3(0, camDist * 0.6, camDist);
+        look = new THREE.Vector3(0, 0, 0);
+      }
+      camera.position.copy(campos);
+      cameraLookAt.copy(look);
+      camera.lookAt(cameraLookAt);
+    }
 
     renderer.render(scene, camera);
 
@@ -525,7 +656,23 @@
 
   // ---------- UI ----------
 
-  infoCloseBtn.addEventListener("click", hideInfoCard);
+  infoCloseBtn.addEventListener("click", () => {
+    if (viewMode === "solar" && selectedSolarBody) deselectSolarBody();
+    else hideInfoCard();
+  });
+
+  modeToggleBtn.addEventListener("click", () => {
+    viewMode = viewMode === "earth" ? "solar" : "earth";
+    worldGroup.visible = viewMode === "earth";
+    solarGroup.visible = viewMode === "solar";
+    layerToggleEl.classList.toggle("hidden", viewMode === "solar");
+    planePanel.classList.toggle("hidden", viewMode === "solar" || !state.layers.planes);
+    selectedSolarBody = null;
+    cameraAnim = null;
+    hideInfoCard();
+    modeToggleBtn.textContent = viewMode === "earth" ? "🌞 Zonnestelsel" : "🌍 Aarde";
+    camDist = viewMode === "solar" ? 12 : 3.3;
+  });
 
   document.querySelectorAll(".layer-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -549,7 +696,11 @@
       initScene();
       placeLocationMarker();
       updateCelestialBodies();
-      setInterval(updateCelestialBodies, 30000);
+      updateSolarSystemPositions();
+      setInterval(() => {
+        updateCelestialBodies();
+        updateSolarSystemPositions();
+      }, 30000);
 
       startWatchingLocation();
       startPlanePolling();

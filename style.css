@@ -94,6 +94,19 @@ html, body {
   pointer-events: none;
 }
 
+.mode-btn {
+  position: absolute;
+  top: calc(env(safe-area-inset-top, 0px) + 10px);
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 0.8rem;
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(140, 170, 255, 0.5);
+  background: rgba(74, 125, 255, 0.22);
+  color: #eaf0ff;
+}
+
 #layer-toggle {
   position: absolute;
   bottom: calc(env(safe-area-inset-bottom, 0px) + 16px);
