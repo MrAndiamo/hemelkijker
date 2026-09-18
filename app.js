@@ -177,7 +177,7 @@
   // ---------- Three.js scene ----------
 
   let renderer, scene, camera;
-  let earthGroup, earthMesh, locationMarker;
+  let worldGroup, earthGroup, earthMesh, locationMarker;
   let sunLight;
   const planetSprites = {}; // body -> sprite
 
@@ -235,8 +235,15 @@
     sunLight.position.set(5, 2, 5);
     scene.add(sunLight);
 
+    // worldGroup bevat aarde + sterren + planeten samen — dit is wat de
+    // gebruiker vastpakt en draait, zodat de hele hemel meebeweegt met de
+    // aarde. De kleine eigen rotaties (echte aardrotatie, sier-omloop van de
+    // sterren) blijven daarbinnen los doorlopen.
+    worldGroup = new THREE.Group();
+    scene.add(worldGroup);
+
     earthGroup = new THREE.Group();
-    scene.add(earthGroup);
+    worldGroup.add(earthGroup);
     lastGmstRad = gmstDegrees(new Date()) * DEG2RAD;
     earthGroup.rotateOnWorldAxis(WORLD_Y, lastGmstRad); // astronomisch correcte startoriëntatie
 
@@ -287,7 +294,7 @@
       sprite.userData = { kind: "star", name: s.name, mag: s.mag };
       state.starGroup.add(sprite);
     }
-    scene.add(state.starGroup);
+    worldGroup.add(state.starGroup);
   }
 
   function addPlanetSprites() {
@@ -299,7 +306,7 @@
       state.planetGroup.add(sprite);
       planetSprites[p.body] = sprite;
     }
-    scene.add(state.planetGroup);
+    worldGroup.add(state.planetGroup);
   }
 
   function updateCelestialBodies() {
@@ -358,12 +365,14 @@
     return Math.sqrt(dx * dx + dy * dy);
   }
 
-  function rotateEarthByDrag(dxPixels, dyPixels) {
-    earthGroup.rotateOnWorldAxis(WORLD_Y, dxPixels * ROTATE_SPEED);
+  function rotateWorldByDrag(dxPixels, dyPixels) {
+    // Draait de hele scène (aarde + sterren + planeten samen) — niet alleen
+    // de aarde — zodat de hemel gewoon meebeweegt zoals je 'm vastpakt.
+    worldGroup.rotateOnWorldAxis(WORLD_Y, dxPixels * ROTATE_SPEED);
     const right = new THREE.Vector3();
     camera.matrixWorld.extractBasis(right, new THREE.Vector3(), new THREE.Vector3());
-    earthGroup.rotateOnWorldAxis(right.normalize(), dyPixels * ROTATE_SPEED);
-    earthGroup.quaternion.normalize();
+    worldGroup.rotateOnWorldAxis(right.normalize(), dyPixels * ROTATE_SPEED);
+    worldGroup.quaternion.normalize();
   }
 
   function setupPointerControls(el) {
@@ -408,7 +417,7 @@
       pointers.set(e.pointerId, { x: e.clientX, y: e.clientY }); // altijd bijwerken, ook tijdens pinch
 
       if (pointers.size === 1) {
-        rotateEarthByDrag(dx, dy);
+        rotateWorldByDrag(dx, dy);
         if (gesture) {
           gesture.maxMove = Math.max(gesture.maxMove, pointDistance({ x: e.clientX, y: e.clientY }, { x: gesture.startX, y: gesture.startY }));
         }
