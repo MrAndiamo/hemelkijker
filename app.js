@@ -222,20 +222,38 @@
     canvas.height = window.innerHeight;
   }
 
-  // Polair: midden = recht omhoog (alt 90), rand = horizon (alt 0), hoek = kompasrichting, noord boven.
+  // Polair: rand = horizon (alt 0), rand van de globe = recht omhoog (alt 90),
+  // hoek = kompasrichting, noord boven. De globe zelf vult het midden zodat
+  // niets "achter de aarde" verdwijnt.
   function domeGeometry() {
     const w = canvas.width, h = canvas.height;
     const cx = w / 2;
     const cy = h / 2 + 10;
-    const R = Math.min(w, h) * 0.42;
-    return { w, h, cx, cy, R };
+    const R = Math.min(w, h) * 0.47;
+    const globeR = R * 0.55;
+    return { w, h, cx, cy, R, globeR };
   }
 
   function project(az, alt, geo) {
     const clampedAlt = Math.max(0, Math.min(90, alt));
-    const r = geo.R * (1 - clampedAlt / 90);
+    const r = geo.globeR + (geo.R - geo.globeR) * (1 - clampedAlt / 90);
     const θ = rad(az);
     return { x: geo.cx + r * Math.sin(θ), y: geo.cy - r * Math.cos(θ) };
+  }
+
+  let globeBitmap = null;
+  let globeBitmapKey = "";
+
+  function ensureGlobeBitmap(diameter) {
+    if (!EarthGlobe.isReady()) return null;
+    const lat0 = state.lat != null ? state.lat : 25;
+    const lon0 = state.lon != null ? state.lon : 15;
+    const key = Math.round(diameter) + "|" + Math.round(lat0) + "|" + Math.round(lon0);
+    if (key !== globeBitmapKey) {
+      globeBitmap = EarthGlobe.render(diameter, lat0, lon0);
+      globeBitmapKey = key;
+    }
+    return globeBitmap;
   }
 
   const DIRS = [
@@ -245,7 +263,7 @@
   const ALT_RINGS = [0, 30, 60];
 
   function draw() {
-    const { w, h, cx, cy, R } = domeGeometry();
+    const { w, h, cx, cy, R, globeR } = domeGeometry();
     ctx.clearRect(0, 0, w, h);
 
     const bg = ctx.createRadialGradient(cx, cy, 0, cx, cy, R * 1.15);
@@ -254,22 +272,36 @@
     ctx.fillStyle = bg;
     ctx.fillRect(0, 0, w, h);
 
-    // hoogte-ringen
+    // hoogte-ringen (rond de globe, niet erover)
     ctx.strokeStyle = "rgba(255,255,255,0.18)";
     ctx.fillStyle = "rgba(255,255,255,0.5)";
     ctx.font = "11px sans-serif";
     ctx.textAlign = "center";
     for (const altVal of ALT_RINGS) {
-      const r = R * (1 - altVal / 90);
+      const r = globeR + (R - globeR) * (1 - altVal / 90);
       ctx.beginPath();
       ctx.arc(cx, cy, r, 0, Math.PI * 2);
       ctx.stroke();
-      if (altVal > 0) ctx.fillText(altVal + "°", cx, cy - r + 12);
+      ctx.fillText(altVal + "°", cx, cy - r + 12);
     }
-    ctx.beginPath();
-    ctx.arc(cx, cy, 2, 0, Math.PI * 2);
-    ctx.fillStyle = "rgba(255,255,255,0.6)";
-    ctx.fill();
+
+    // de aarde zelf, in het midden
+    const globe = ensureGlobeBitmap(globeR * 2);
+    if (globe) {
+      ctx.drawImage(globe.canvas, cx - globe.size / 2, cy - globe.size / 2, globe.size, globe.size);
+    } else {
+      const placeholder = ctx.createRadialGradient(
+        cx - globeR * 0.3, cy - globeR * 0.3, globeR * 0.1,
+        cx, cy, globeR
+      );
+      placeholder.addColorStop(0, "#3a6ea8");
+      placeholder.addColorStop(0.6, "#1c4a7a");
+      placeholder.addColorStop(1, "#0a1f38");
+      ctx.beginPath();
+      ctx.arc(cx, cy, globeR, 0, Math.PI * 2);
+      ctx.fillStyle = placeholder;
+      ctx.fill();
+    }
 
     // kompasrichtingen rondom de rand
     ctx.font = "13px sans-serif";
@@ -283,7 +315,7 @@
 
     const objects = collectObjects();
     for (const obj of objects) {
-      const { x, y } = project(obj.az, obj.alt, { cx, cy, R });
+      const { x, y } = project(obj.az, obj.alt, { cx, cy, R, globeR });
       const { icon, color } = styleFor(obj);
       const dimAlpha = obj.type === "star" ? Math.max(0.35, 1 - (obj.mag + 1.5) / 6) : 1;
 
