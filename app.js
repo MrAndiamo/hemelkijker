@@ -572,9 +572,11 @@
     // handleTap() zelf dubbeltikken herkennen op timing.
     el.addEventListener("dblclick", (e) => {
       if (viewMode !== "solar") return;
-      let best = { dist: 24, data: null, sprite: null };
-      best = nearestSpriteInGroup(solarGroup, e.clientX, e.clientY, best);
-      best = nearestSpriteInGroup(solarStarGroup, e.clientX, e.clientY, best);
+      // Alleen planeten/de zon zijn centreerbaar — sterren worden hier
+      // bewust niet meegezocht, anders "steelt" een toevallig dichterbij
+      // staande achtergrondster de treffer en gebeurt er niks bij het
+      // dubbelklikken op de planeet/zon erachter.
+      const best = nearestSpriteInGroup(solarGroup, e.clientX, e.clientY, { dist: 24, data: null, sprite: null });
       if (best.data) acceptCenter(best);
     });
   }
@@ -611,8 +613,12 @@
     let best = { dist: 24, data: null, sprite: null }; // 24px tik-tolerantie
 
     if (viewMode === "solar") {
+      // Planeten/zon krijgen voorrang boven sterren op dezelfde tikplek —
+      // anders kan een toevallig dichterbij liggende achtergrondster de
+      // treffer stelen en blokkeert dat het dubbeltikken (centreren) op de
+      // planeet/zon erachter.
       best = nearestSpriteInGroup(solarGroup, clientX, clientY, best);
-      best = nearestSpriteInGroup(solarStarGroup, clientX, clientY, best);
+      if (!best.data) best = nearestSpriteInGroup(solarStarGroup, clientX, clientY, best);
       if (best.data) {
         if (pointerType === "mouse") {
           // dubbelklikken wordt afgehandeld door de aparte "dblclick"-listener
