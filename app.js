@@ -385,19 +385,23 @@
     return Math.sqrt(dx * dx + dy * dy);
   }
 
-  let camAngle = 0;
+  // Camera staat vast (alleen afstand verandert door zoom) — de zichtbare
+  // beweging komt van de hemelbol zelf die om de aarde draait, niet van een
+  // camera die om een stilstaande scène cirkelt (dat zag er plat/links-rechts
+  // uit i.p.v. als "eromheen gaan", want sterren staan zo ver weg dat een
+  // camera-omloop daar geen diepte-effect op geeft).
+  let skySpin = 0;
   function animate() {
     requestAnimationFrame(animate);
 
     const gmstRad = gmstDegrees(new Date()) * DEG2RAD;
-    earthGroup.rotation.y = gmstRad;
+    earthGroup.rotation.y = gmstRad; // echte, tijd-gebaseerde rotatie (heel langzaam)
 
-    camAngle += 0.0009;
-    camera.position.set(
-      camDist * Math.sin(camAngle),
-      camDist * 0.26,
-      camDist * Math.cos(camAngle)
-    );
+    skySpin += 0.0028; // sierlijke, zichtbare omloop: ± 1 ronde per 37s
+    state.starGroup.rotation.y = skySpin;
+    state.planetGroup.rotation.y = skySpin;
+
+    camera.position.set(0, camDist * 0.22, camDist);
     camera.lookAt(0, 0, 0);
 
     state.planetGroup.visible = state.layers.planets;
